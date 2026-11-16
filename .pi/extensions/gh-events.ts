@@ -90,7 +90,7 @@ export default function (pi: ExtensionAPI) {
 		execFile(`${REPO_DIR}/tools/next-ready`, (e, out) => {
 			const n = String(out).trim();
 			if (e || !n) return digest(`dispatch: no Ready ticket${e ? ` (error ${String(e).slice(0, 80)})` : ""}`);
-			execFile(`${REPO_DIR}/tools/agent`, [n], (e2) => (e2 ? (queue.push(`dispatch: launching #${n} failed`), flush()) : digest(`dispatch: launched #${n}`)));
+			execFile(`${REPO_DIR}/tools/agent`, [n], { env: { ...process.env, PIRUST_PARENT: process.env.HC_TERMINAL_ID ?? "" } }, (e2) => (e2 ? (queue.push(`dispatch: launching #${n} failed`), flush()) : digest(`dispatch: launched #${n}`)));
 		});
 	const finishAgent = (term: string, why: string) => {
 		const n = tickets.get(term);
