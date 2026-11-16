@@ -1,4 +1,5 @@
 # Orchestrator state (resume here; skill factory-recover)
+- 00:25 CEO (Patrick): work lives in tickets, scripts route events, chat stays short. New P0 first: forced handoff (tool_choice-locked handoff tool + script ladder), event-route (agent events → ticket actions). Then 99 97 ... as below. WIP max 4 agents.
 - 00:16 CEO: all on pi (Patrick). Docs: factory/README.md, runtime.md, design.md. Skills in .agents/skills. Baseline ~/.pi/pirust-usage.log. t1nm restart needed after 93 + stop gate (#97) land (Patrick-visible).
 - Stopgap dispatcher: pirust-stopgap (no parent, outlive). 30s loop: finish done agents (wt finish, kill, rm); launch from ~/.pig/pirust-queue (edit to reorder), then tools/next-ready; max 5. t1nm gh-events also dispatches. Kill when #91 watchdog lands.
 - Queue (CEO order): 99 97 | #52 split children 100 102 103 104 105 | 65 96 98, then 84. #52 Backlog (parent); close PR 62 70 82 when children merge.
