@@ -1,9 +1,24 @@
 // Enforces orchestrator (CEO) rules from AGENTS.md on this session's own tool calls.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 
 const ROOT = `${homedir()}/private/pirust`;
+
+// Gate reload_runtime on tools/extcheck: extensions must load clean before a reload. extcheck
+// writes a stamp keyed by the extensions' content hashes; a reload is allowed only when the
+// stamp matches the current files, so editing an extension blocks reload until extcheck passes.
+const EXT_DIR = `${ROOT}/.pi/extensions`;
+const EXT_PASS = `${ROOT}/.pi/.extcheck-pass`;
+// Fingerprint = `sha256sum .pi/extensions/*.ts` (sorted, relative paths), byte-for-byte what
+// tools/extcheck writes. Reading each file keeps this in sync with the shell's sha256sum.
+const fingerprint = () => {
+	const names = readdirSync(EXT_DIR).filter((n) => n.endsWith(".ts")).sort();
+	return names
+		.map((n) => `${createHash("sha256").update(readFileSync(`${EXT_DIR}/${n}`)).digest("hex")}  .pi/extensions/${n}`)
+		.join("\n") + "\n";
+};
 const DOC_OK = /(^|\/)(AGENTS\.md|factory\/[^/]+\.md|docs\/adr\/[^/]+\.md)$/;
 const SLOW = /\b(git clone|hc wait|sleep\s+([3-9]|\d\d)|cargo (build|test|nextest)|devenv shell|tools\/agent\b|watch\s)|for .*tools\/(ticket|gh-bot)/;
 const CODE_WRITE = /(sed -i|python3? -|cat\s*>|tee\s|>\s*\S*(tools|\.pi|\.github|src|crates)\/)/;
@@ -17,6 +32,12 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_call", async (e: any) => {
+		if (e.toolName === "reload_runtime") {
+			let stamp = "";
+			try { stamp = readFileSync(EXT_PASS, "utf8"); } catch { /* no stamp yet: never checked */ }
+			if (stamp !== fingerprint())
+				return { block: true, reason: "Run tools/extcheck first: it loads every .pi/extensions/*.ts; reload_runtime is allowed once it exits 0." };
+		}
 		if (!on) return;
 		const i = e.input ?? {};
 		if (e.toolName === "edit" || e.toolName === "write") {

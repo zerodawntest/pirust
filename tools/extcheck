@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# extcheck [FILE...]  Fail fast if any .pi/extensions/*.ts throws at load.
+# Each file is loaded on its own in `pi --mode rpc --no-session` from a scratch (non-repo) cwd,
+# so a load error names exactly one file: pi auto-discovers .pi/extensions from cwd, and an
+# explicit -e file is the only extension loaded. With no args, checks this repo's .pi/extensions.
+# On success, records a pass stamp keyed by the extensions' content hashes; ceo-guard.ts blocks
+# reload_runtime until the stamp matches, so a reload only happens after a clean load of the
+# current files.
+set -uo pipefail # no -e: we inspect each file's exit code.
+D=$(dirname "$(readlink -f "$0")")
+R=$(dirname "$D")
+files=("$@")
+if [ ${#files[@]} -eq 0 ]; then
+	for f in "$R"/.pi/extensions/*.ts; do [[ -e "$f" && "$f" != *.test.ts ]] && files+=("$f"); done
+fi
+
+# Non-repo cwd (a fresh temp dir has no .pi/extensions), load each file explicitly with -e.
+CWD=$(mktemp -d); trap 'rmdir "$CWD" 2>/dev/null' EXIT
+cd "$CWD" || exit 1
+for f in "${files[@]}"; do
+	if ! out=$(pi --mode rpc --no-session -e "$f" 2>&1 </dev/null); then
+		printf '%s\n' "$out" >&2
+		echo "extcheck: load failed: ${f#"$R"/}" >&2
+		exit 1
+	fi
+done
+
+# All loaded: record the pass for the current content hashes (see fingerprint note in ceo-guard.ts).
+# Relative paths (cd "$R" above) match ceo-guard.ts's fingerprint, which is rooted at ROOT.
+cd "$R" || exit 1
+sha256sum .pi/extensions/*.ts > .pi/.extcheck-pass
+echo "extcheck: ok (${#files[@]} extension file(s))"
