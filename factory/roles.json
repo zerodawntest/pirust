@@ -1,0 +1,18 @@
+{
+  "$comment": "Tool loadout per role (spec: factory/automation.md rows 4-6; docs/extensions.md 'Tool Exposure' + prepareLoadout; examples/extensions/preset.ts). `descriptions` replaces each tool's model-facing description with a short one, cutting the first request's input tokens; `roles[role].tools` replaces the default active set. The built-in `read` (300-line cap) and `bash` (4 KB tail) are overridden by factory/extensions/loadout.ts. A role is matched from the agent's system prompt: 'You are a pirust <role>'.",
+  "descriptions": {
+    "read": "Read a file. Text is capped at 300 lines; pass offset/limit to page a longer file. Images are returned as attachments.",
+    "bash": "Run a bash command; returns stdout+stderr. Output is capped to the last 4 KB. Optional timeout in seconds.",
+    "edit": "Edit a file with exact oldText/newText replacements. Every oldText must match one unique, non-overlapping region.",
+    "write": "Create a file, overwriting if it exists; parent dirs are created. Use only for new files or full rewrites.",
+    "grep": "Search file contents for a string; returns matching lines as file:line.",
+    "find": "Find files by glob; returns matching paths.",
+    "ls": "List a directory; returns its entries."
+  },
+  "roles": {
+    "coder": { "tools": ["read", "bash", "edit", "write", "handoff"] },
+    "reviewer": { "tools": ["read", "bash", "handoff"] },
+    "planner": { "tools": ["read", "write", "handoff"] },
+    "ceo": { "tools": ["read", "bash", "edit", "write", "grep", "find", "ls", "handoff"] }
+  }
+}
