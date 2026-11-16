@@ -1,0 +1,189 @@
+# PR gate for the integration branch (ADR-0003, tiers 1-2).
+#
+# Tier 1 is a local, signed attestation: an annotated tag `preflight` on the PR
+# head commit whose message is
+#
+#   tree=<tree hash of the head commit>
+#   result=pass
+#
+# made with `git tag -s -F <file> preflight <head sha>` (SSH key), and pushed
+# with `git push -f origin refs/tags/preflight`. The signature lives on the tag
+# object, so it covers the attestation text; the trusted keys are listed in
+# `.github/allowed_signers`.
+#
+# A valid signature whose `tree` equals the PR head tree proves tier 1 ran on
+# exactly this code, so the test job skips it. Missing, unsigned, forged,
+# untrusted or other-tree attestations run tier 1 in CI (fail-closed).
+#
+# CodeQL is not defined here: it runs through the repository's CodeQL *default
+# setup* (Settings → Security → Code security and analysis → CodeQL), whose
+# analysis config lives on GitHub and needs `security-events: write`, so it
+# cannot be done with a `permissions: contents: read` workflow. This workflow
+# covers the rest of the gate.
+
+name: PR
+run-name: "PR ${{ github.event.pull_request.number }}"
+
+on:
+  pull_request:
+    branches:
+      - integration
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+# Stop the run at the first failing job.
+fail-fast: true
+
+# Third-party actions are pinned to a full commit SHA (not a moving tag).
+# `allowed_signers` and the tier-1 checks are repo-owned, so no `id-token`
+# (Sigstore) signing of artifacts happens here.
+permissions:
+  contents: read
+
+concurrency:
+  group: "pr-${{ github.event.pull_request.number }}"
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  preflight:
+    name: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event.pull_request.draft == false
+    outputs:
+      # "true" when a valid signed attestation covers the head tree.
+      skip-tests: ${{ steps.attest.outputs.skip-tests }}
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Verify preflight attestation
+        id: attest
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ALLOWED_SIGNERS: ${{ github.workspace }}/.github/allowed_signers
+        run: |
+          set -euo pipefail
+          head="$HEAD_SHA"
+          tree=$(git rev-parse "$head^{tree}")
+          skip=false
+
+          # Attestation = signed tag `preflight` on the head commit.
+          git fetch -q origin "refs/tags/preflight:refs/tags/preflight" || true
+          tagged=$(git rev-parse -q --verify 'preflight^{}' || true)
+          attested=""
+          if [ -n "$tagged" ] && [ "$tagged" = "$head" ]; then
+            content=$(git cat-file tag preflight)
+            case "$content" in
+              *"BEGIN SSH SIGNATURE"*)
+                # Verify the signature on the tag object (not the note text).
+                if git -c gpg.format=ssh \
+                  -c "gpg.ssh.allowedSignersFile=$ALLOWED_SIGNERS" \
+                  verify-tag -v preflight >/dev/null 2>&1; then
+                  attested=$(printf '%s\n' "$content" | sed -e '1,/^$/d')
+                fi
+                ;;
+              # A GPG-format signature would need the signer's public keyring in
+              # the runner, which this repository does not distribute: no match,
+              # so the tests run (fail closed).
+            esac
+          fi
+
+          if [ -n "$attested" ] &&
+            [ "$(printf '%s\n' "$attested" | sed -n 1p)" = "tree=$tree" ] &&
+            [ "$(printf '%s\n' "$attested" | sed -n 2p)" = "result=pass" ]; then
+            skip=true
+            echo "Valid attestation for $head (tree $tree): tests skipped."
+          else
+            echo "No valid attestation for $head (tree $tree): running tier 1."
+          fi
+
+          echo "skip-tests=$skip" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: preflight
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Install Rust 1.100.0
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: "1.100.0"
+          components: clippy, rustfmt
+          profile: minimal
+      - name: Cache cargo and build artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: "1.100.0"
+      - name: Run tier 1 (tests, cargo deny, cargo audit)
+        if: ${{ needs.preflight.outputs.skip-tests == 'false' && hashFiles('Cargo.toml') != '' }}
+        run: |
+          set -euo pipefail
+          cargo fmt --check --all
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --workspace
+          if command -v cargo-deny >/dev/null; then cargo deny check; fi
+          if command -v cargo-audit >/dev/null; then cargo audit; fi
+
+  rust-lints:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Install Rust 1.100.0
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: "1.100.0"
+          components: clippy, rustfmt
+          profile: minimal
+      - name: Cache cargo and build artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: "1.100.0"
+      # No Rust crate in this repository yet, so these only run once one lands
+      # (`hashFiles` is empty today). They are not gated on the attestation:
+      # fmt and clippy always run.
+      - name: cargo fmt --check --all
+        if: ${{ hashFiles('Cargo.toml') != '' }}
+        run: cargo fmt --check --all
+      - name: cargo clippy -- -D warnings
+        if: ${{ hashFiles('Cargo.toml') != '' }}
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  dependency-review:
+    name: dependency review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Dependency review
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          base-ref: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.sha }}

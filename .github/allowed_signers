@@ -1,0 +1,19 @@
+# Allowed signers for the preflight attestation (see .github/workflows/pr.yml).
+#
+# Format is what `ssh-keygen -Y verify` and `git` (gpg.format=ssh) read: one
+# entry per line,
+#
+#   <principal> <keytype> <base64 key>
+#
+# The principal is the `comment` field of the local signing key, so a key
+# committed here must match the principal the signer used. Lines starting with
+# `#` are comments. One key with several principals is space-separated.
+#
+# Add every machine allowed to attest a preflight run:
+#
+#   cat ~/.ssh/id_ed25519.pub
+#
+# No real key is committed here: the signing keys live on the local machines
+# (the sandboxed agents have none), so this is a placeholder until the
+# orchestrator adds them. Until then no attestation verifies, and CI runs the
+# tests (fail-closed).
