@@ -4,6 +4,11 @@
 set -euo pipefail
 R=$(dirname "$(dirname "$(readlink -f "$0")")")
 W=$(readlink -f "$1"); shift
+# Agent tools (handoff, #73): pig loads .ts extensions from <cwd>/.pi/extensions and the
+# worktree is the only writable place in the sandbox, so install them into the worktree.
+# Tests stay out: pig would load them as extensions and node:test would run them there.
+mkdir -p "$W/.pi/extensions"
+for f in "$R"/factory/extensions/*.ts; do [[ "$f" == *.test.ts ]] || cp -f "$f" "$W/.pi/extensions/"; done
 HCB=$(readlink -f "$(command -v hc)" 2>/dev/null || true)
 H=$HOME; S=$H/.pig/sandbox; A=$S/agent
 mkdir -p "$S/cargo" "$A/sessions"; touch "$A/models.json"
