@@ -23,6 +23,13 @@ const adminEnv = () => {
 const REPO_EVENTS = "issues,issue_comment,pull_request,pull_request_review,pull_request_review_comment,check_suite,workflow_run";
 const DEBOUNCE_MS = 10_000;
 const REPO_DIR = `${homedir()}/private/pirust`;
+const DIGEST = `${homedir()}/.pi/pirust-digest.log`;
+const digest = (s: string) => { try { appendFileSync(DIGEST, `${new Date().toISOString()} ${s}\n`); } catch {} };
+const escalates = (type: string, p: any) =>
+	p.sender?.type === "User" &&
+	(["issue_comment", "pull_request_review", "pull_request_review_comment"].includes(type) ||
+		(type === "issues" && ["opened", "reopened"].includes(p.action)) ||
+		(type === "issues" && p.action === "assigned" && p.assignee?.login === BOT));
 
 const gql = (id: string) =>
 	new Promise<string>((res) =>
@@ -82,8 +89,10 @@ export default function (pi: ExtensionAPI) {
 		if (!n || handled.has(term)) return;
 		handled.add(term);
 		execFile(`${REPO_DIR}/tools/wt`, ["finish", n], { env: process.env }, (e, out, err) => {
-			queue.push(`agent #${n} ${why}: ${e ? `wt finish failed: ${String(err).trim().slice(-200)}` : out.trim()}`);
+			const msg = `agent #${n} ${why}: ${e ? `wt finish failed: ${String(err).trim().slice(-200)}` : out.trim()}`;
 			execFile("hc", ["kill", term], () => execFile("hc", ["rm", term], () => {}));
+			if (!e && why === "done") return digest(msg);
+			queue.push(msg);
 			clearTimeout(timer);
 			timer = setTimeout(flush, 1000);
 		});
@@ -149,7 +158,11 @@ export default function (pi: ExtensionAPI) {
 					const p = JSON.parse(body);
 					if (p.sender?.login === BOT) return; // own actions
 					const line = await summarize(String(req.headers["x-github-event"] ?? ""), p);
-					if (!line || queue.includes(line)) return;
+					if (!line) return;
+					const type = String(req.headers["x-github-event"] ?? "");
+					const bad = (type === "check_suite" || type === "workflow_run");
+					if (!bad && !escalates(type, p)) return digest(line);
+					if (queue.includes(line)) return;
 					queue.push(line);
 					clearTimeout(timer);
 					timer = setTimeout(flush, DEBOUNCE_MS);
