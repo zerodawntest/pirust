@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# usage N        Sum assistant usage (calls,input,output,cacheRead,cacheWrite) for ticket N
+#                from ~/.pig/sandbox/agent/sessions/*pirust-wt-N*/*.jsonl. Prints one JSON line.
+# usage --total  Totals per day and per role (assistant, toolResult, ...), over all pirust-wt sessions.
+set -euo pipefail
+S=$HOME/.pig/sandbox/agent/sessions
+cmd=${1:-}
+
+# Usage lives on assistant messages ("message.usage"); a tool result carries usage only
+# when the tool made its own model calls. Sum only present .message.usage to skip role-less lines.
+if [ "$cmd" = "--total" ]; then
+  shopt -s nullglob
+  files=("$S"/*pirust-wt-*/*.jsonl)
+  shopt -u nullglob
+  [ ${#files[@]} -gt 0 ] || { echo "usage: no sessions under $S" >&2; exit 0; }
+  jq -rs '
+    [ .[] | select(.type=="message" and .message.usage)
+      | {d:(.timestamp[0:10]), r:.message.role,
+         input:.message.usage.input, output:.message.usage.output,
+         cacheRead:.message.usage.cacheRead, cacheWrite:.message.usage.cacheWrite} ]
+    | group_by([.d,.r])
+    | .[]
+    | "\(.[0].d) \(.[0].r) calls=\(length) input=\([.[].input]|add) output=\([.[].output]|add) cacheRead=\([.[].cacheRead]|add) cacheWrite=\([.[].cacheWrite]|add)"
+  ' "${files[@]}"
+  exit 0
+fi
+
+[[ "$cmd" =~ ^[0-9]+$ ]] || { sed -n '2,4p' "$0" >&2; exit 2; }
+N=$cmd
+shopt -s nullglob
+files=("$S"/*pirust-wt-"$N"*/*.jsonl)
+shopt -u nullglob
+[ ${#files[@]} -gt 0 ] || { echo "usage: no sessions for ticket $N" >&2; exit 0; }
+jq -sc --argjson N "$N" '
+  [ .[] | select(.type=="message" and .message.role=="assistant" and .message.usage)
+    | .message.usage ]
+  | {ticket:$N, calls:length,
+     input:(map(.input)|add // 0), output:(map(.output)|add // 0),
+     cacheRead:(map(.cacheRead)|add // 0), cacheWrite:(map(.cacheWrite)|add // 0)}
+' "${files[@]}"

@@ -19,6 +19,10 @@ finish)
   if [ ! -f HANDOFF.md ] && [ -z "$(git status --porcelain)" ] && [ -n "$("$D/gh-bot" pr list --head "$BR" --state all --json number -q '.[0].number')" ]; then echo "already-finished"; exit 0; fi
   H=$(cat HANDOFF.md 2>/dev/null || true); rm -f HANDOFF.md
   [ -n "$H" ] || H="(no HANDOFF.md)"
+  # Append this ticket's assistant-usage line to the handoff (goes in the comment) and to the aggregate log.
+  U=$("$D/usage" "$N")
+  H+=$'\n\n'"Usage: $U"
+  printf '%s\n' "$U" >>"$HOME/.pig/pirust-usage.jsonl"
   git add -A
   if git diff --cached --quiet; then
     "$D/gh-bot" issue comment "$N" -b "Agent finished without changes. Handoff: $H" >/dev/null
