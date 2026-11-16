@@ -12,7 +12,9 @@ Decision by Patrick (2026-11-16): the CEO is an SDK orchestrator on Opus 5.5. It
 It runs the gh webhooks (reconnect, plus catch-up via the API), hc events (reconciled at startup), the agent monitor, the dispatcher, and the token log. It does not depend on any chat session.
 
 ## CEO session policy (start values; tune from `~/.pi/pirust-usage.log`)
-- The SDK session uses Opus 5.5 with `PI_CACHE_RETENTION=long` (1h).
+- The SDK session uses Opus 5.5, thinking high, with `PI_CACHE_RETENTION=long` (1h). It is the CEO and the liaison brain.
+- Patrick chat (this session) moves to a lower model once the daemon has run 24h without missed events; it only talks and forwards to the daemon. Pick the model from `~/.pi/pirust-usage.log`.
+- Runtime candidate: pi-durable (`Conversation.reset(handoff)`, tasks with checkpoints, `Harness.wake()` timers, `pi.usage`, node SQLite storage). It survives crashes and replaces STATE.md juggling. Decided by the spike ticket; the SDK `AgentSessionRuntime.newSession()` is the fallback.
 - The session stays warm while wakes come close together. Prompt order: a stable prefix (CEO prompt + rules), then a short tail of events.
 - **Reset** rather than compact, by writing `STATE.md` (≤15 lines) and starting a new session, when:
   - the context is over 60k tokens;
