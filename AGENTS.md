@@ -13,8 +13,16 @@ We will do a minimal design round to check up on the requirements. This means, w
 Repo: https://github.com/zerodawntest/pirust (public, org `zerodawntest`). Board: org-owned GitHub Project.
 GitHub access: GitHub App `pirust-bot` (App ID 5790484), installed on `zerodawntest` for `pirust` only. Key: `/home/zerodawn/Documents/key/pirust-bot.2026-11-16.private-key.pem` — only the orchestrator/scripts use it; agents get no GitHub token.
 
+# Orchestrator rules (enforced)
+
+- Keep going autonomously. Do not stop after reports.
+- Before high-level tickets or big decisions: create/update a ticket, tag @Patrick-Kappen (label `needs:patrick`), and work on other things meanwhile.
+- The final PR into `main` is Patrick's to review/merge. Everything else (integration branch, agent PRs) the team handles.
+- The orchestrator does not write code; agents do.
+
 # Environment (verified 2026-11-16)
 
+- Always required: the extension gateway and Claude auth must be running/available (for orchestrator and agents).
 - Agent models: IBM endpoints only, `ibm-next/qwen38-flash-next` (also `ibm-vllm/qwen38-int4`). Never the `opencode*` qwen models.
 - NixOS with impermanence: `/` is tmpfs, `/tmp` and `~/.cache` are wiped on reboot. Persistent: `~/private` (this repo), `~/Documents` (keys), `~/.pig`, `~/.config/herdr-*`, `~/.local/state/herdr-core`, `~/.ssh`, `~/.config/gh`. Anything that must survive goes in the repo, `~/.pig` or a persisted path, never `/tmp`.
 - Process runner: herdr. `herdr-core` (`hc`) runs persistent terminals; `herdr-app` is the window only. Read `hc --skill` before starting agents/services.
