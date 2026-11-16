@@ -1,0 +1,10 @@
+# Re-include files the user's global excludesFile ignores
+!AGENTS.md
+!.pi/
+
+/target
+.devenv*
+devenv.local.nix
+.direnv
+result
+result-*

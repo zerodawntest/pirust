@@ -1,0 +1,38 @@
+{
+  "project": "PVT_kwDOFU_l5s4Br65q",
+  "number": 2,
+  "fields": {
+    "Status": {
+      "id": "PVTSSF_lADOFU_l5s4Br65qzhqLWEQ",
+      "options": {
+        "Backlog": "7f562ed5",
+        "Refining": "998c7cfc",
+        "Ready": "f337fff8",
+        "In progress": "03f0c2d9",
+        "In review": "93ff8dd2",
+        "Integration": "cce9c86b",
+        "Done": "0f2569ef"
+      }
+    },
+    "Priority": {
+      "id": "PVTSSF_lADOFU_l5s4Br65qzhqLWNE",
+      "options": {
+        "P0": "47b7b6a8",
+        "P1": "bd6e3c3c",
+        "P2": "bee9a055"
+      }
+    },
+    "Size": {
+      "id": "PVTSSF_lADOFU_l5s4Br65qzhqLWNI",
+      "options": {
+        "S": "5ead854f",
+        "M": "2f1565a9",
+        "L": "30983b39"
+      }
+    },
+    "Claimed by": {
+      "id": "PVTF_lADOFU_l5s4Br65qzhqLWNk",
+      "options": {}
+    }
+  }
+}

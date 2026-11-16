@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# gh as pirust-bot (zerodawntest/pirust only).
+set -euo pipefail
+GH_TOKEN=$("$(dirname "$(readlink -f "$0")")/gh-app-token") exec gh "$@"

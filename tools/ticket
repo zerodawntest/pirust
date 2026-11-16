@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# ticket new  -t TITLE -k Epic|Feature|Task|Bug [-p PARENT#] [-l lab1,lab2] [-s Status] [-P P1] [-S M] [-b BODY|-]
+# ticket set  NUM [-s Status] [-P P1] [-S M] [-c CLAIM]
+# Prints issue number. Repo is fixed: zerodawntest/pirust.
+set -euo pipefail
+D=$(dirname "$(readlink -f "$0")"); B=$D/board.json; R=zerodawntest/pirust
+export GH_TOKEN=$("$D/gh-app-token")
+fid(){ jq -r --arg f "$1" '.fields[$f].id' "$B"; }
+oid(){ jq -r --arg f "$1" --arg o "$2" '.fields[$f].options[$o] // error("bad \($f): \($o)")' "$B"; }
+setsel(){ gh api graphql -f query="mutation{ updateProjectV2ItemFieldValue(input:{projectId:\"$(jq -r .project "$B")\", itemId:\"$1\", fieldId:\"$(fid "$2")\", value:{singleSelectOptionId:\"$(oid "$2" "$3")\"}}){ clientMutationId } }" >/dev/null; }
+settxt(){ gh api graphql -f query="mutation{ updateProjectV2ItemFieldValue(input:{projectId:\"$(jq -r .project "$B")\", itemId:\"$1\", fieldId:\"$(fid "$2")\", value:{text:\"$3\"}}){ clientMutationId } }" >/dev/null; }
+item(){ # issue number -> project item id (adds if missing)
+  local nid; nid=$(gh api repos/$R/issues/$1 --jq .node_id)
+  local q="mutation{ addProjectV2ItemById(input:{projectId:\"$(jq -r .project "$B")\", contentId:\"$nid\"}){ item{ id } } }"
+  gh api graphql -f query="$q" --jq .data.addProjectV2ItemById.item.id 2>/dev/null || { sleep 2; gh api graphql -f query="$q" --jq .data.addProjectV2ItemById.item.id; }; }
+cmd=$1; shift
+case $cmd in
+new)
+  T= K=Task P= L= S=Backlog PR= SZ= BODY=
+  while getopts t:k:p:l:s:P:S:b: o; do case $o in t)T=$OPTARG;; k)K=$OPTARG;; p)P=$OPTARG;; l)L=$OPTARG;; s)S=$OPTARG;; P)PR=$OPTARG;; S)SZ=$OPTARG;; b)BODY=$OPTARG;; esac; done
+  [ "$BODY" = - ] && BODY=$(cat); BODY=$(printf '%b' "$BODY")
+  TYPE=$K; [ "$K" = Epic ] && { TYPE=; L=${L:+$L,}epic; }
+  args=(-f title="$T" -f body="$BODY"); [ -n "$TYPE" ] && args+=(-f type="$TYPE")
+  for l in ${L//,/ }; do args+=(-f "labels[]=$l"); done
+  J=$(gh api repos/$R/issues "${args[@]}"); N=$(jq -r .number <<<"$J"); ID=$(jq -r .id <<<"$J")
+  [ -n "$P" ] && gh api repos/$R/issues/$P/sub_issues -F sub_issue_id="$ID" >/dev/null
+  I=$(item "$N"); setsel "$I" Status "$S"; [ -n "$PR" ] && setsel "$I" Priority "$PR"; [ -n "$SZ" ] && setsel "$I" Size "$SZ"
+  echo "$N" ;;
+set)
+  N=$1; shift; I=$(item "$N")
+  while getopts s:P:S:c: o; do case $o in s)setsel "$I" Status "$OPTARG";; P)setsel "$I" Priority "$OPTARG";; S)setsel "$I" Size "$OPTARG";; c)settxt "$I" "Claimed by" "$OPTARG";; esac; done ;;
+*) sed -n 2,4p "$0"; exit 1 ;;
+esac

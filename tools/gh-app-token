@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Prints a 1h installation token for pirust-bot (zerodawntest/pirust only).
+set -euo pipefail
+D=$(dirname "$(readlink -f "$0")")
+KEY=${PIRUST_APP_KEY:-/home/zerodawn/Documents/key/pirust-bot.2026-11-16.private-key.pem}
+CACHE=${XDG_RUNTIME_DIR:-/tmp}/pirust-bot.token
+if [ -s "$CACHE" ] && [ $(( $(date +%s) - $(stat -c %Y "$CACHE") )) -lt 3000 ]; then cat "$CACHE"; exit; fi
+JWT=$(node "$D/gh-app-jwt.mjs" 5790484 "$KEY")
+umask 077
+T=$(curl -sf -X POST -H "Authorization: Bearer $JWT" -H "Accept: application/vnd.github+json" \
+  https://api.github.com/app/installations/182709625/access_tokens | jq -er .token)
+printf '%s\n' "$T" > "$CACHE"; printf '%s\n' "$T"
