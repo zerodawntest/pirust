@@ -84,6 +84,14 @@ export default function (pi: ExtensionAPI) {
 	// Agent terminals (label project=pirust): on done/blocked/error/exit -> tools/wt finish, report in batch.
 	const handled = new Set<string>();
 	const tickets = new Map<string, string>();
+	const busy = new Set<string>();
+	const watch = new Map<string, ReturnType<typeof setTimeout>>();
+	const launchNext = () =>
+		execFile(`${REPO_DIR}/tools/next-ready`, (e, out) => {
+			const n = String(out).trim();
+			if (e || !n) return digest(`dispatch: no Ready ticket${e ? ` (error ${String(e).slice(0, 80)})` : ""}`);
+			execFile(`${REPO_DIR}/tools/agent`, [n], (e2) => (e2 ? (queue.push(`dispatch: launching #${n} failed`), flush()) : digest(`dispatch: launched #${n}`)));
+		});
 	const finishAgent = (term: string, why: string) => {
 		const n = tickets.get(term);
 		if (!n || handled.has(term)) return;
@@ -91,6 +99,8 @@ export default function (pi: ExtensionAPI) {
 		execFile(`${REPO_DIR}/tools/wt`, ["finish", n], { env: process.env }, (e, out, err) => {
 			const msg = `agent #${n} ${why}: ${e ? `wt finish failed: ${String(err).trim().slice(-200)}` : out.trim()}`;
 			execFile("hc", ["kill", term], () => execFile("hc", ["rm", term], () => {}));
+			clearTimeout(watch.get(term));
+			launchNext();
 			if (!e && why === "done") return digest(msg);
 			queue.push(msg);
 			clearTimeout(timer);
@@ -114,9 +124,13 @@ export default function (pi: ExtensionAPI) {
 					const t = ev.data?.labels?.ticket;
 					if (term && t) tickets.set(term, t);
 					if (ev.type !== "labels" && ev.type !== "foreground") log(`hc ${ev.type} ${term} ${JSON.stringify(ev.data).slice(0, 200)}`);
-					const st = ev.data?.status ?? ev.data?.word;
+					const st = ev.data?.status?.state;
+					if (term && tickets.has(term) && !watch.has(term))
+						watch.set(term, setTimeout(() => { queue.push(`agent #${tickets.get(term)} watchdog: >45 min, killed`); finishAgent(term, "timeout"); flush(); }, 45 * 60_000));
+					if (st === "working") busy.add(term);
 					if (ev.type === "finished") finishAgent(term, `exited ${ev.data?.exit_code ?? ""}`);
-					else if (["done", "blocked", "error"].includes(st)) finishAgent(term, st);
+					else if (st === "idle" && busy.has(term)) finishAgent(term, "done");
+					else if (["blocked", "error"].includes(st)) finishAgent(term, st);
 				} catch {}
 			}
 		});
