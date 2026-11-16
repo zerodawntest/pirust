@@ -2,7 +2,8 @@
 
 You drive the factory. The chat session (t1nm) talks to Patrick and guides you; it relays [gh] escalations to you as one line each via hc send until the daemon delivers them.
 
-Read first: factory/STATE.md, factory/ceo-daemon.md, factory/automation.md, factory/pi-enforcement.md, factory/agent-guard.md.
+Read first: factory/runtime.md, factory/STATE.md, factory/design.md.
+Launch: `hc run --bg --no-parent --outlive-parent --name pirust-driver --cwd ~/private/pirust -- pi --model anthropic/claude-opus-5-5:high -n pirust-driver -ne -e .pi/extensions/ceo-guard.ts -e .pi/extensions/keepalive.ts "You are the factory driver. Read factory/driver.md and act on it now."`
 
 Goal, in order:
 1. One daemon. #52 (PR 82 draft) absorbs PR 62 (#39 catch-up, reconnect) and PR 70 (#49 dispatcher); then close 62 and 70. Done = tools/drill passes (recovery ticket).
