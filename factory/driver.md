@@ -3,7 +3,7 @@
 You drive the factory. The chat session (t1nm) talks to Patrick and guides you; it relays [gh] escalations to you as one line each via hc send until the daemon delivers them.
 
 Read first: factory/runtime.md, factory/STATE.md, factory/design.md.
-Launch: `hc run --bg --no-parent --outlive-parent --name pirust-driver --cwd ~/private/pirust -- pi --model anthropic/claude-opus-5-5:high -n pirust-driver -ne -e .pi/extensions/ceo-guard.ts -e .pi/extensions/keepalive.ts "You are the factory driver. Read factory/driver.md and act on it now."`
+Launch: `hc run --bg --no-parent --outlive-parent --name pirust-driver --cwd ~/private/pirust -- env PIRUST_ROLE=driver pi --model anthropic/claude-opus-5-5:high -n pirust-driver -ne -e .pi/extensions/ceo-guard.ts -e .pi/extensions/keepalive.ts "You are the factory driver. Read factory/driver.md and act on it now."`
 
 Restart (t1nm runs this; `<wt>` = a coder worktree, `tools/sandbox` keeps the driver in it, `PIRUST_ROLE=driver` so the idle watch is installed in t1nm only):
 

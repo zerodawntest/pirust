@@ -1,11 +1,10 @@
 # Orchestrator state (resume here; skill factory-recover)
-- 00:16 CEO: all on pi (Patrick). Docs rewritten: factory/README.md, runtime.md, design.md (4 old docs deleted, 1078 words). Skills in .agents/skills (5, proven discovered by pi get_commands). Baseline in ~/.pi/pirust-usage.log (t1nm 423 req $16.10, 18 guard blocks).
-- P0 order sent to driver: PR 93 keepalive + PR 95 review merge, stop gate, 91 watchdog, ceo-guard mention bug, agents on pi, 92 lessons, tools/merge, 84 drills. t1nm restart needed after 93 + stop gate land (Patrick-visible).
-- Driver brief: factory/driver.md. Liaison/dispatcher in t1nm (gh-events.ts) stalled ~23:00 → driver dispatched/finished by hand; #86 keepalive fixes it.
-- ff-merge recipe: hc run --bg bash fn `ff PR TICKET CHECK` (rebase on integration in ~/.pig/cache/merge-N, %G? check, push t/N + integration). Logged as `PRnn ...` in digest.
-- 2026-11-17 00:05 merged + Done: 80 66 77 64 59 85 88 89 90.
-- Stopgap dispatcher: hc terminal pirust-stopgap (bash loop 30s: finish done agents, launch queue 91 92 then next-ready, max 5). Kill it when #91 watchdog lands.
-- Rejected → Ready: 67/#46 (actionlint top-level fail-fast), 71/#61 (test creates real issue), 87/#68 (RULES_PATH ../ → ../../), 51/#40 (conflict tools/wt).
-- Running: 76 86 52 60 83 (parent t1nm, --outlive-parent). Queue: 91 92, then 84 drills (after 52), then P1 Ready 55 57 58 65 69 75 78 79 81.
-- #52 PR 82 must absorb 62 (#39) + 70 (#49), then close 62/70. Then #78 durable spike → CEO-on-durable ticket.
+- 00:16 CEO: all on pi (Patrick). Docs: factory/README.md, runtime.md, design.md. Skills in .agents/skills. Baseline ~/.pi/pirust-usage.log. t1nm restart needed after 93 + stop gate (#97) land (Patrick-visible).
+- Stopgap dispatcher: pirust-stopgap (no parent, outlive). 30s loop: finish done agents (wt finish, kill, rm); launch from ~/.pig/pirust-queue (edit to reorder), then tools/next-ready; max 5. t1nm gh-events also dispatches. Kill when #91 watchdog lands.
+- Queue (CEO order): 99 97 | #52 split children 100 102 103 104 105 | 65 96 98, then 84. #52 Backlog (parent); close PR 62 70 82 when children merge.
+- Parked (claim "parked:#99"): #40 (PR 51, tools/wt), #60 (tools/sandbox). After #99 merges: clear claim, relaunch.
+- Merged + Done 2026-11-17: 80 66 77 64 59 85 88 89 90 93(#86); 67(#46) in flight.
+- Rejected → Ready: 71/#61 test makes real issue; 87/#68 RULES_PATH; 95/#76 self-approve 422 + "In review" unquoted; 101/#92 lesson regexes block mentions (.pig, herdr, git push).
+- Follow-ups to ticket: test/keepalive.test.ts hangs with hc on PATH; tools/sandbox copies agent-tools.ts into wt (git-excluded now); ~/.config/herdr-core/templates/coder.md must mirror factory/templates after #96.
+- #96 absorbs #73 load fix: templates use -ne, so agent-tools/handoff never loads (evidence on #96).
 - Waiting on Patrick: #4 #5 #6 #28 #32
