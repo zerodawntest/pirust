@@ -180,8 +180,16 @@ export default function (pi: ExtensionAPI) {
 				k.stderr?.on("data", (d) => /error/i.test(String(d)) && ctx.ui.notify(`gh-events: ${String(d).trim()}`, "warning"));
 				kids.push(k);
 			};
-			run([`--repo=${REPO}`, `--events=${REPO_EVENTS}`]);
-			run([`--org=${ORG}`, "--events=projects_v2_item"]);
+			// a stale `cli` hook from a previous forwarder blocks a new one (422)
+			const clear = (path: string, then: () => void) =>
+				execFile("gh", ["api", path, "--jq", '.[]|select(.name=="cli")|.id'], { env }, (_e, out) => {
+					const ids = String(out).trim().split("\n").filter(Boolean);
+					let left = ids.length;
+					if (!left) return then();
+					for (const id of ids) execFile("gh", ["api", "-X", "DELETE", `${path}/${id}`], { env }, () => --left || then());
+				});
+			clear(`repos/${REPO}/hooks`, () => run([`--repo=${REPO}`, `--events=${REPO_EVENTS}`]));
+			clear(`orgs/${ORG}/hooks`, () => run([`--org=${ORG}`, "--events=projects_v2_item"]));
 			watchAgents();
 			ctx.ui.setStatus("gh-events", "gh: live");
 		});
