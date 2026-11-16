@@ -1,0 +1,67 @@
+---
+# Dependency and action updates for pirust (Rust port of pi).
+# Cadence: weekly, grouped (see ADR-0003). CodeQL, secret scanning, push
+# protection, and Dependabot alerts/auto-merge are enabled via the GitHub API
+# by the orchestrator, not here.
+version: 2
+updates:
+  # Cargo workspace at the repo root (Cargo.toml / Cargo.lock).
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "03:00"
+      timezone: "Etc/UTC"
+    groups:
+      cargo-all:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
+      cargo-security:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "deps(cargo)"
+
+  # GitHub Actions are pinned by full commit SHA (see ADR-0003); Dependabot
+  # updates the pinned SHA and the `# vX.Y.Z` comment together.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "03:00"
+      timezone: "Etc/UTC"
+    groups:
+      github-actions-all:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
+      github-actions-security:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "deps(actions)"
+
+  # Nix/development environment: `devenv.lock` (and `flake.lock` if present).
+  - package-ecosystem: "nix"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "03:00"
+      timezone: "Etc/UTC"
+    groups:
+      nix-all:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
+      nix-security:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "deps(nix)"
