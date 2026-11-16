@@ -5,6 +5,18 @@ You drive the factory. The chat session (t1nm) talks to Patrick and guides you; 
 Read first: factory/runtime.md, factory/STATE.md, factory/design.md.
 Launch: `hc run --bg --no-parent --outlive-parent --name pirust-driver --cwd ~/private/pirust -- pi --model anthropic/claude-opus-5-5:high -n pirust-driver -ne -e .pi/extensions/ceo-guard.ts -e .pi/extensions/keepalive.ts "You are the factory driver. Read factory/driver.md and act on it now."`
 
+Restart (t1nm runs this; `<wt>` = a coder worktree, `tools/sandbox` keeps the driver in it, `PIRUST_ROLE=driver` so the idle watch is installed in t1nm only):
+
+```sh
+PIRUST_ROLE=driver hc run --bg --outlive-parent --name pirust-driver --cwd <wt> \
+  tools/sandbox <wt> pi --mode rpc --no-session -ne \
+  -e .pi/extensions/keepalive.ts -e .pi/extensions/ceo-guard.ts \
+  --model anthropic/claude-opus-5.5 --thinking high \
+  "Read factory/STATE.md and factory/driver.md, then drive the factory."
+```
+
+Keep the two `-e` paths relative: the sandbox binds only `<wt>`, and `pi` resolves `-e` against the cwd. `keepalive.ts` (#86) wakes this session once after an auto-compaction, and t1nm sends `continue from factory/driver.md` when you sit idle 10 min with Ready/In progress items on the board.
+
 Goal, in order:
 1. One daemon. #52 (PR 82 draft) absorbs PR 62 (#39 catch-up, reconnect) and PR 70 (#49 dispatcher); then close 62 and 70. Done = tools/drill passes (recovery ticket).
 2. Durable. Spike #78 → a ticket to run the CEO (you) on pi-durable: Conversation.reset(handoff), wake tasks, usage doc, node SQLite. Then you move onto it. Inventory: docs/port/durable-inventory.md (PR 64, branch t/38).
