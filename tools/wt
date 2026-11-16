@@ -1,29 +1,82 @@
 #!/usr/bin/env bash
 # wt create NUM          worktree ~/private/pirust-wt/NUM on branch t/NUM from origin/integration
+# wt refresh NUM         new branch from origin/integration, replay the ticket diff; conflicts stay
+#                        as uncommitted conflict markers in the worktree, ticket back to Ready
 # wt finish NUM          HANDOFF.md -> ticket comment; signed commit, push, PR to integration, In review
 # wt rm NUM              remove worktree + local branch
-# Agents never run this; the orchestrator/extension does.
+# Agents never run these; the orchestrator/extension does.
+#
+# A rebase conflict is not a human job (#99): agents have no git, so `finish` on a
+# conflict calls `refresh` instead of failing. `refresh` leaves the conflicts as
+# markers in the worktree and the ticket at Ready, so the next agent only removes the
+# markers, then finishes as usual. `finish` refuses to push while markers remain, so a
+# PR never carries them.
 set -euo pipefail
 D=$(dirname "$(readlink -f "$0")"); R=$(dirname "$D"); B=integration
-cmd=${1:-}; N=${2:-}; [[ $N =~ ^[0-9]+$ ]] || { sed -n 2,5p "$0"; exit 1; }
+cmd=${1:-}; N=${2:-}; [[ $N =~ ^[0-9]+$ ]] || { sed -n 2,6p "$0"; exit 1; }
 W=$HOME/private/pirust-wt/$N; BR=t/$N
+# Seven "<" plus a space: the line a conflict starts with. Built, not written, so this
+# file never contains the marker string (a checker scanning the tree would flag it).
+MARK=$(printf '<%.0s' 1 2 3 4 5 6 7)" "
 g(){ git -C "$R" "$@"; }
+w(){ git -C "$W" "$@"; }
+# Files this ticket touches: committed, staged and unstaged. NUL separated (paths may
+# contain spaces); `markers` lists the ones that still hold a conflict marker.
+files(){ { w diff --name-only; w diff --name-only --cached; w diff --name-only "origin/$B..HEAD"; } | sort -u | tr '\n' '\0'; }
+markers(){ files | xargs -0 -r grep -lIF -e "$MARK" 2>/dev/null | paste -sd, - || true; }
 case $cmd in
 create)
   g fetch -q origin "$B"
   [ -d "$W" ] || g worktree add -q -B "$BR" "$W" "origin/$B"
   echo "$W" ;;
+refresh)
+  [ -d "$W" ] || { echo "no-worktree"; exit 0; }
+  cd "$W"
+  g fetch -q origin "$B"
+  base=$(w merge-base HEAD "origin/$B" 2>/dev/null) || base=$(w rev-parse "origin/$B")
+  # The ticket's diff is everything this branch adds on top of integration, including
+  # work the agent left uncommitted (agents never run git). The patch goes in the git
+  # dir: persists (unlike /tmp), and is never staged, so it cannot land in the PR.
+  gd=$(w rev-parse --absolute-git-dir)
+  p=$gd/ticket-$N.patch
+  w add -A
+  w diff --binary "$base" > "$p"
+  [ -s "$p" ] || { echo "no-changes"; exit 0; }
+  w checkout -q -f -B "$BR" "origin/$B"
+  applied=1
+  w apply --3way --whitespace=nowarn "$p" >/dev/null 2>&1 || applied=0
+  M=$(markers)
+  # Ready, not blocked: the next agent picks it up, resolves the markers, then finishes.
+  "$D/ticket" set "$N" -s Ready
+  if [ "$applied" = 0 ] && [ -z "$M" ]; then
+    "$D/gh-bot" issue comment "$N" -b "Blocked: the ticket diff does not apply onto $B; patch kept in $p." >/dev/null
+    echo "apply-failed $p"; exit 2
+  fi
+  if [ -n "$M" ]; then
+    "$D/gh-bot" issue comment "$N" -b "Rebase onto $B conflicts; new branch from origin/$B with the ticket diff applied, conflict markers left uncommitted. Resolve markers in $M, re-run the ticket checks, then \`wt finish $N\`." >/dev/null
+    echo "refreshed resolve-markers $M"
+  else
+    "$D/gh-bot" issue comment "$N" -b "Rebase onto $B is clean: the ticket diff is applied (uncommitted) on a fresh branch. Re-run the ticket checks, then \`wt finish $N\`." >/dev/null
+    echo "refreshed"
+  fi ;;
 finish)
   [ -d "$W" ] || { echo "no-worktree"; exit 0; }
   cd "$W"
-  if [ ! -f HANDOFF.md ] && [ -z "$(git status --porcelain)" ] && [ -n "$("$D/gh-bot" pr list --head "$BR" --state all --json number -q '.[0].number')" ]; then echo "already-finished"; exit 0; fi
+  if [ ! -f HANDOFF.md ] && [ -z "$(w status --porcelain)" ] && [ -n "$("$D/gh-bot" pr list --head "$BR" --state all --json number -q '.[0].number')" ]; then echo "already-finished"; exit 0; fi
   H=$(cat HANDOFF.md 2>/dev/null || true); rm -f HANDOFF.md
   [ -n "$H" ] || H="(no HANDOFF.md)"
   # An agent may commit its own work (e.g. resolving a rebase conflict), so
   # "no changes" = nothing staged AND no commits ahead of origin/$B (#63).
-  g fetch -q origin "$B"; git add -A
-  staged=0; git diff --cached --quiet || staged=1
-  ahead=$(git rev-list --count "origin/$B..HEAD")
+  g fetch -q origin "$B"; w add -A
+  # Never ship unresolved conflicts: an agent that stops with markers in the worktree
+  # blocks here, so no PR can carry them (#99).
+  M=$(markers)
+  if [ -n "$M" ]; then
+    "$D/gh-bot" issue comment "$N" -b "Blocked: unresolved conflict markers in $M. Remove the markers, re-run the ticket checks, write HANDOFF.md, then \`wt finish $N\`. Handoff: $H" >/dev/null
+    echo "conflict-markers $M"; exit 2
+  fi
+  staged=0; w diff --cached --quiet || staged=1
+  ahead=$(w rev-list --count "origin/$B..HEAD")
   if [ "$staged" = 0 ] && [ "$ahead" = 0 ]; then
     "$D/gh-bot" issue comment "$N" -b "Agent finished without changes. Handoff: $H" >/dev/null
     echo "no-changes"; exit 0
@@ -31,14 +84,17 @@ finish)
   J=$("$D/gh-bot" issue view "$N" --json title,issueType -q '{t:.title,k:(.issueType.name//"Task")}' 2>/dev/null || echo '{"t":"ticket","k":"Task"}')
   T=$(jq -r .t <<<"$J"); K=$(jq -r .k <<<"$J")
   case $K in Bug) TY=fix;; Feature) TY=feat;; *) TY=chore;; esac
-  [ "$staged" = 1 ] && git commit -qS -m "$TY(#$N): $T" -m "$H" -m "Refs #$N" # already committed by the agent
-  if ! git rebase -q "origin/$B"; then
-    C=$(git diff --name-only --diff-filter=U | paste -sd, -)
-    git rebase --abort
-    "$D/gh-bot" issue comment "$N" -b "Blocked: rebase onto $B conflicts in ${C:-unknown}; nothing pushed, worktree restored. Handoff: $H" >/dev/null
-    echo "rebase-conflict ${C:-unknown}"; exit 2
+  [ "$staged" = 1 ] && w commit -qS -m "$TY(#$N): $T" -m "$H" -m "Refs #$N" # already committed by the agent
+  if ! w rebase -q "origin/$B"; then
+    C=$(w diff --name-only --diff-filter=U | paste -sd, -)
+    w rebase --abort
+    # Not a human job: hand the work to the next agent as markers, ticket back to Ready.
+    # Stop here: no PR (the work is uncommitted in the worktree until it is resolved).
+    "$D/wt" refresh "$N"
+    echo "refreshed ${C:-unknown}"
+    exit 0
   fi
-  git push -q -f origin "$BR"
+  w push -q -f origin "$BR"
   P=$("$D/gh-bot" pr list --head "$BR" --json number -q '.[0].number')
   [ -n "$P" ] || P=$("$D/gh-bot" pr create --base "$B" --head "$BR" --title "$TY(#$N): $T" --body $'Closes #'"$N"$'\n\n'"$H" | grep -oE '[0-9]+$')
   "$D/gh-bot" issue comment "$N" -b "Handoff: $H (PR #$P)" >/dev/null
@@ -47,5 +103,5 @@ finish)
 rm)
   g worktree remove --force "$W" 2>/dev/null || true
   g branch -D "$BR" >/dev/null 2>&1 || true ;;
-*) sed -n 2,5p "$0"; exit 1 ;;
+*) sed -n 2,6p "$0"; exit 1 ;;
 esac
