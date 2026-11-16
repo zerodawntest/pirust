@@ -15,6 +15,11 @@
 # exactly this code, so the test job skips it. Missing, unsigned, forged,
 # untrusted or other-tree attestations run tier 1 in CI (fail-closed).
 #
+# Fast failure: `rust-lints` (fmt + clippy) runs first and `test` needs it, so
+# the tests do not start when the cheap lint job fails. GitHub Actions has no
+# "stop the run at the first failing job" switch (the `fail-fast` keyword only
+# applies to matrix legs), so fast failure is the job graph, not a flag.
+#
 # CodeQL is not defined here: it runs through the repository's CodeQL *default
 # setup* (Settings → Security → Code security and analysis → CodeQL), whose
 # analysis config lives on GitHub and needs `security-events: write`, so it
@@ -33,9 +38,6 @@ on:
       - synchronize
       - reopened
       - ready_for_review
-
-# Stop the run at the first failing job.
-fail-fast: true
 
 # Third-party actions are pinned to a full commit SHA (not a moving tag).
 # `allowed_signers` and the tier-1 checks are repo-owned, so no `id-token`
@@ -115,7 +117,8 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: preflight
+    # Needs `rust-lints`: when fmt/clippy fails the tests do not run.
+    needs: [preflight, rust-lints]
     steps:
       - name: Checkout PR head
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -132,12 +135,12 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: "1.100.0"
+      # fmt and clippy belong to `rust-lints` (they run there always, and this
+      # job needs it), so tier 1 here is tests + deny + audit only.
       - name: Run tier 1 (tests, cargo deny, cargo audit)
         if: ${{ needs.preflight.outputs.skip-tests == 'false' && hashFiles('Cargo.toml') != '' }}
         run: |
           set -euo pipefail
-          cargo fmt --check --all
-          cargo clippy --all-targets --all-features -- -D warnings
           cargo test --workspace
           if command -v cargo-deny >/dev/null; then cargo deny check; fi
           if command -v cargo-audit >/dev/null; then cargo audit; fi
