@@ -1,10 +1,9 @@
 # Orchestrator state (resume here)
-- 2026-11-17 00:00: driver = pirust-driver (t1r4, Opus 5.5 high, -ne + ceo-guard, brief factory/driver.md). t1nm = Patrick chat + liaison host; relays escalations via hc send pirust-driver until the daemon (#52) delivers them. Restart the driver: same hc run, see driver.md.
-- Liaison+monitor+stopgap dispatch: .pi/extensions/gh-events.ts. CEO rules: .pi/extensions/ceo-guard.ts. Digest ~/.pi/pirust-digest.log
-- Designs: factory/ceo-daemon.md (Opus 5.5 high CEO, chat moves to a lower model later, pi-durable candidate), factory/agent-guard.md, factory/pi-enforcement.md, factory/automation.md (script it map)
-- Running 2026-11-16 23:50: 52 53 60 63 68. New tickets: agent-tools handoff, handoff gate, loadout, auto review, durable spike, catalogue (numbers in digest)
-- P0 Ready: 60 agent-guard, 61 ticket validation, wt-finish bug, 53 monitor budget/handoff. Running: 46 49 50 52 (+1 dispatched)
-- In review, no reviewer yet: PR 59 (#41), #39 PR, #38. Merge after reviewer/dispatcher ticket lands, or CEO ff-merges with CI green.
-- Known: done state missed at liaison start (#40, #38). False stall kills on finished agents (fix in 53/60).
+- Driver brief: factory/driver.md. Liaison/dispatcher in t1nm (gh-events.ts) stalled ~23:00 → driver dispatched/finished by hand; #86 keepalive fixes it.
+- ff-merge recipe: hc run --bg bash fn `ff PR TICKET CHECK` (rebase on integration in ~/.pig/cache/merge-N, %G? check, push t/N + integration). Logged as `PRnn ...` in digest.
+- 2026-11-17 00:05 merged + Done: 80 66 77 64 59 85 88 89 90.
+- Stopgap dispatcher: hc terminal pirust-stopgap (bash loop 30s: finish done agents, launch queue 91 92 then next-ready, max 5). Kill it when #91 watchdog lands.
+- Rejected → Ready: 67/#46 (actionlint top-level fail-fast), 71/#61 (test creates real issue), 87/#68 (RULES_PATH ../ → ../../), 51/#40 (conflict tools/wt).
+- Running: 76 86 52 60 83 (parent t1nm, --outlive-parent). Queue: 91 92, then 84 drills (after 52), then P1 Ready 55 57 58 65 69 75 78 79 81.
+- #52 PR 82 must absorb 62 (#39) + 70 (#49), then close 62/70. Then #78 durable spike → CEO-on-durable ticket.
 - Waiting on Patrick: #4 #5 #6 #28 #32
-- Don't reload_runtime (it ends the turn) until #50 lands
