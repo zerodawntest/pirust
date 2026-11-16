@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# review [PR]        Review one open PR: a sandboxed reviewer writes verdict.json, this posts it.
+# review --schema    Print the verdict.json JSON Schema (what the reviewer's verdict tool declares).
+# Blocks on the reviewer; run it under `hc run --bg`, never in a chat foreground (AGENTS.md).
+# The reviewer gets no git, no GitHub, no edit/write: it reads the diff and the files, then calls
+# the verdict tool (factory/extensions/verdict.ts). This script validates verdict.json against the
+# same schema, posts one PR review, and moves the ticket. No wake: the coder picks the ticket up.
+set -euo pipefail
+D=$(dirname "$(readlink -f "$0")"); R=$(dirname "$D"); REPO=zerodawntest/pirust
+VERDICT=$R/factory/extensions/verdict.ts
+MODEL=${PIRUST_REVIEW_MODEL:-ibm-next/qwen38-flash-next}
+PAR=${PIRUST_PARENT:-${HC_TERMINAL_ID:-}}
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+
+if [ "${1:-}" = "--schema" ]; then
+  # Literal JSON: "$schema" is a JSON key, not a shell expansion.
+  # shellcheck disable=SC2016
+  printf '%s\n' '{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"review verdict","type":"object","additionalProperties":false,"required":["verdict","comments","summary"],"properties":{"verdict":{"description":"approve to let the PR go, changes to send the ticket back to Ready","enum":["approve","changes"]},"comments":{"description":"blocking issues only, max 5","type":"array","maxItems":5,"items":{"type":"object","additionalProperties":false,"required":["path","line","body"],"properties":{"path":{"description":"changed file, relative to the repo root","type":"string","minLength":1},"line":{"description":"line in that file the comment is about","type":"integer","minimum":1},"body":{"description":"what to fix, and why","type":"string","minLength":1,"maxLength":500}}}},"summary":{"description":"one paragraph: what you checked and what matters","type":"string","minLength":1,"maxLength":500}}}'
+  exit 0
+fi
+
+pr=${1:?usage: review PR | review --schema}
+G=$D/gh-bot
+[ -f "$VERDICT" ] || { echo "BLOCKED: reviewer tool not found: $VERDICT"; exit 1; }
+IFS=$'\t' read -r state head sha base title < <("$G" api "repos/$REPO/pulls/$pr" --jq '[.state,.head.ref,.head.sha,.base.ref,.title]|@tsv')
+[ "$state" = open ] || { echo "BLOCKED: PR #$pr is not open ($state)"; exit 1; }
+
+# One call gives the changed files and their patches: the reviewer reads them, no clone and no git.
+fj=$T/files.json; "$G" api "repos/$REPO/pulls/$pr/files?per_page=100" --paginate > "$fj"
+mapfile -t files < <(jq -r '.[].filename' "$fj")
+[ "${#files[@]}" -gt 0 ] || { echo "BLOCKED: PR #$pr has no files"; exit 1; }
+printf -v flist '%s ' "${files[@]}"
+printf -v diff '%s\n' "$(jq -r '.[] | "@\(.filename)\n\(.patch // "(no patch)")"' "$fj")"
+
+# Reviewer template by changed paths: rust > ci > scripts > docs. No match: rust, the strictest.
+if printf '%s\n' "${files[@]}" | grep -qE '\.rs$|(^|/)Cargo\.(toml|lock)$'; then role=rust
+elif printf '%s\n' "${files[@]}" | grep -qE '^\.github/|^\.githooks/|\.pre-commit-config\.yaml$'; then role=ci
+elif printf '%s\n' "${files[@]}" | grep -qE '\.sh$|^tools/'; then role=scripts
+elif printf '%s\n' "${files[@]}" | grep -qE '\.md$|^docs/'; then role=docs
+else role=rust; fi
+
+# The coder's worktree holds the PR head (branch t/<N>); review any other head in the main checkout.
+ticket=; w=$R
+if [[ $head =~ ^t/([0-9]+)$ ]]; then ticket=${BASH_REMATCH[1]}; w=$HOME/private/pirust-wt/$ticket; fi
+[ -d "$w" ] || w=$R
+
+name=rev-$pr
+read -r -d '' prompt <<PROMPT || true
+You are a $role reviewer for a Rust port of pi. Review PR #$pr (base $base): $title. Read-only: change nothing.
+Files: $flist
+Diff:
+$diff
+Call the verdict tool once, as your last action, with the whole result: "approve", or "changes" with 1 to 5 comments (path, line, body). Every comment names one changed file and one line in it, and says what to fix and why. A nit, a style taste, or a nice-to-have is not a comment: put it in the summary. You have no git, no network, no GitHub.
+PROMPT
+# Sandboxed (tools/sandbox) and read-only (--tools): the worktree is its only writable tree, and
+# read, bash, verdict are the only tools. It writes verdict.json in the worktree, then stops.
+hc run --bg --outlive-parent --no-notify --parent "$PAR" --name "$name" --label project=pi-rev --label "ticket=${ticket:-0}" --label "role=$role" --cwd "$w" \
+  "$D/sandbox" "$w" pig --model "$MODEL" --thinking high --no-context-files --no-skills --no-prompt-templates --no-mcp --no-approve -e "$VERDICT" --tools read,bash,verdict "$prompt"
+hc wait "$name" >/dev/null 2>&1 || true
+hc kill "$name" >/dev/null 2>&1 || true; hc rm "$name" >/dev/null 2>&1 || true
+
+v=$w/verdict.json
+[ -s "$v" ] || { echo "BLOCKED: $role reviewer left no verdict.json for PR #$pr"; exit 1; }
+# Same schema as factory/extensions/verdict.ts: an agent cannot invent a verdict, only fill it.
+jq -e '
+  (.verdict == "approve" or .verdict == "changes") and
+  (.comments | type == "array" and length <= 5 and all(
+    (.path | type == "string" and length > 0) and
+    (.line | type == "number" and . >= 1 and . == floor) and
+    (.body | type == "string" and length > 0) and
+    ((keys - ["path", "line", "body"]) == []))) and
+  (.summary | type == "string" and length > 0) and
+  ((keys - ["verdict", "comments", "summary"]) == [])
+' "$v" >/dev/null || { echo "BLOCKED: $w/verdict.json fails the schema (see tools/review --schema)"; exit 1; }
+
+verdict=$(jq -r .verdict "$v"); summary=$(jq -r .summary "$v")
+cl=$(jq -r '.comments[] | "- `\(.path):\(.line)` — \(.body)"' "$v")
+# Post only comments on files this PR touches; the schema already caps them at 5.
+comments=$(jq -c --slurpfile f "$fj" '[.comments[] | select(.path as $p | ($f[0] | map(.filename) | index($p)) != null)] | map({path, line, side: "RIGHT", body})' "$v")
+n=$(jq 'length' <<<"$comments")
+body="**Review ($role): $verdict** — $summary"
+if [ "$n" -gt 0 ]; then printf -v body '%s\n\n%s' "$body" "$cl"; fi
+event=REQUEST_CHANGES; [ "$verdict" = approve ] && event=APPROVE
+jq -nc --argjson cs "$comments" --arg ev "$event" --arg cid "$sha" --arg body "$body" \
+  '{commit_id: $cid, event: $ev, body: $body, comments: $cs}' > "$T/review.json"
+"$G" api -X POST "repos/$REPO/pulls/$pr/reviews" --input "$T/review.json" >/dev/null
+# Keep the verdict outside the repo: the coder's worktree must not commit it, and the repo stays clean.
+mkdir -p "$HOME/.pig/sandbox/verdicts"; mv "$v" "$HOME/.pig/sandbox/verdicts/pr-$pr.json"
+echo "review: $verdict ($role) on PR #$pr — $n comment(s) posted"
+
+if [ "$verdict" = changes ]; then
+  [ -n "$ticket" ] || { echo "BLOCKED: PR #$pr has no ticket to move"; exit 1; }
+  "$G" issue comment "$ticket" -b "$(printf 'Review of PR #%s (%s): changes requested.\n\n%s' "$pr" "$role" "$cl")" >/dev/null
+  "$D/ticket" set "$ticket" -s Ready
+  echo "ticket #$ticket -> Ready (comments above)"
+elif [ -z "$ticket" ]; then
+  echo "BLOCKED: PR #$pr has no ticket to move"
+  exit 1
+else
+  "$D/ticket" set "$ticket" -s In review
+  echo "ticket #$ticket -> In review"
+fi
