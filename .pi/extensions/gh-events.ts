@@ -6,7 +6,7 @@ import { spawn, execFile, execFileSync, type ChildProcess } from "node:child_pro
 import { createServer, type Server } from "node:http";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync, readdirSync, watch as fsWatch } from "node:fs";
 const log = (s: string) => { try { appendFileSync(`${homedir()}/.pi/gh-events.log`, `${new Date().toISOString()} ${s}\n`); } catch {} };
 
 const REPO = "zerodawntest/pirust";
@@ -86,6 +86,50 @@ export default function (pi: ExtensionAPI) {
 	const tickets = new Map<string, string>();
 	const busy = new Set<string>();
 	const watch = new Map<string, ReturnType<typeof setTimeout>>();
+	// Fail-fast monitor: session file writes are the heartbeat (fs.watch, no polling).
+	const SESS = `${homedir()}/.pig/sandbox/agent/sessions`;
+	const mon = new Map<string, { off: number; tok: number; cr: number; calls: string[]; stall?: ReturnType<typeof setTimeout> }>();
+	const termOf = (n: string) => [...tickets].find(([, v]) => v === n)?.[0];
+	const kill = (term: string | undefined, why: string) => {
+		if (!term || handled.has(term)) return;
+		queue.push(`agent #${tickets.get(term)} killed: ${why}`);
+		finishAgent(term, `killed (${why})`);
+	};
+	const onSession = (file: string) => {
+		const n = file.match(/pirust-wt-(\d+)--/)?.[1];
+		if (!n) return;
+		const m = mon.get(n) ?? { off: 0, tok: 0, cr: 0, calls: [] };
+		mon.set(n, m);
+		let txt = "";
+		try {
+			const b = readFileSync(`${SESS}/${file}`);
+			txt = b.subarray(m.off).toString();
+			m.off = b.length;
+		} catch { return; }
+		for (const line of txt.split("\n")) {
+			try {
+				const e = JSON.parse(line);
+				if (e.type !== "message" || e.message?.role !== "assistant") continue;
+				const u = e.message.usage ?? {};
+				m.tok += (u.input ?? 0) + (u.output ?? 0);
+				m.cr += u.cacheRead ?? 0;
+				for (const c of e.message.content ?? []) if (c.type === "toolCall") m.calls.push(c.name + JSON.stringify(c.arguments));
+			} catch {}
+		}
+		m.calls = m.calls.slice(-4);
+		const term = termOf(n);
+		clearTimeout(m.stall);
+		if (m.calls.length === 4 && m.calls.every((c) => c === m.calls[0])) return kill(term, "loop: same tool call 4x");
+		if (m.tok > 400_000 || m.cr > 3_000_000) return kill(term, `budget: ${m.tok} in+out, ${m.cr} cache`);
+		m.stall = setTimeout(() => kill(termOf(n), "stalled 5 min"), 5 * 60_000);
+	};
+	const watchSessions = () => {
+		try {
+			const w = fsWatch(SESS, { recursive: true }, (_t, f) => f && String(f).endsWith(".jsonl") && onSession(String(f)));
+			kids.push({ kill: () => w.close() } as any);
+			for (const d of readdirSync(SESS)) for (const f of readdirSync(`${SESS}/${d}`)) if (f.endsWith(".jsonl")) onSession(`${d}/${f}`);
+		} catch (e) { log(`session watch failed ${e}`); }
+	};
 	const launchNext = () =>
 		execFile(`${REPO_DIR}/tools/next-ready`, (e, out) => {
 			const n = String(out).trim();
@@ -126,7 +170,7 @@ export default function (pi: ExtensionAPI) {
 					if (ev.type !== "labels" && ev.type !== "foreground") log(`hc ${ev.type} ${term} ${JSON.stringify(ev.data).slice(0, 200)}`);
 					const st = ev.data?.status?.state;
 					if (term && tickets.has(term) && !watch.has(term))
-						watch.set(term, setTimeout(() => { queue.push(`agent #${tickets.get(term)} watchdog: >45 min, killed`); finishAgent(term, "timeout"); flush(); }, 45 * 60_000));
+						watch.set(term, setTimeout(() => kill(term, "hard cap 30 min"), 30 * 60_000));
 					if (st === "working") busy.add(term);
 					if (ev.type === "finished") finishAgent(term, `exited ${ev.data?.exit_code ?? ""}`);
 					else if (st === "idle" && busy.has(term)) finishAgent(term, "done");
@@ -205,6 +249,7 @@ export default function (pi: ExtensionAPI) {
 			clear(`repos/${REPO}/hooks`, () => run([`--repo=${REPO}`, `--events=${REPO_EVENTS}`]));
 			clear(`orgs/${ORG}/hooks`, () => run([`--org=${ORG}`, "--events=projects_v2_item"]));
 			watchAgents();
+			watchSessions();
 			ctx.ui.setStatus("gh-events", "gh: live");
 		});
 	});
