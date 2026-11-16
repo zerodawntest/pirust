@@ -18,6 +18,7 @@ args=(
   --bind "$S/cargo" "$H/.cargo"
   --ro-bind /run/agenix/gateway_key_pi /run/agenix/gateway_key_pi
   --ro-bind /run/agenix/ibm_next_api_key /run/agenix/ibm_next_api_key
+  --ro-bind-try "$H/private/pirust-src" /src
   --bind "$W" "$W" --ro-bind /dev/null "$W/.git" --chdir "$W"
   --setenv HOME "$H" --setenv CARGO_HOME "$H/.cargo" --setenv PIG_CODING_AGENT_DIR "$H/.pig/agent"
 )
