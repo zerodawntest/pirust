@@ -189,10 +189,15 @@ export default function (pi: ExtensionAPI) {
 			return { content: [{ type: "text", text: "Reload after this response." }], details: {}, terminate: true };
 		},
 	});
-	pi.on("agent_settled", () => {
+	// A reload ends the turn (the tool returns `terminate`), and `/reload-runtime` is a command, not
+	// a prompt, so nothing woke the orchestrator after the swap. Send one follow-up message to start
+	// the next turn. Only the `reload_runtime` tool sets `reloadRequested`, so a manual
+	// `/reload-runtime` by Patrick does not auto-continue.
+	pi.on("agent_settled", async () => {
 		if (!reloadRequested) return;
 		reloadRequested = false;
-		pi.sendUserMessage("/reload-runtime", { expandPromptTemplates: true });
+		await pi.sendUserMessage("/reload-runtime", { expandPromptTemplates: true });
+		pi.sendMessage({ customType: "reload-continue", content: "Reloaded. Continue with Next work (AGENTS.md).", display: true }, { triggerTurn: true, deliverAs: "followUp" });
 	});
 
 	pi.on("session_start", async (_e, ctx) => {
