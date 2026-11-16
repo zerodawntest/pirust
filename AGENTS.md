@@ -83,7 +83,7 @@ Docs:
 
 - We will use a kanban flow. Where every ticket start's at backlog, it will be refined, investigated, put on ready.
 - In progress means a agent is working on it, it will claim it with his session ID.
-- Before it goes to ready -> My account ( Patrick-Kappen ) should be tagged, and must review. The same goes after integration, i have to review the PR.
+- Only high-impact tickets (changing how things work: architecture, process, permissions, models) need Patrick review before Ready. All other tickets go to Ready without asking. Patrick reviews the integration → main PR.
 - Agent's should be able to start straight from the ticket without instructions.
 - All communication is handled trough tickets. Unless i'm avaiable at chat.
 - All tickets should always be updated every step of the way ( preferably automatically as well )
