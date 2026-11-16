@@ -3,8 +3,7 @@
 set -euo pipefail
 D=$(dirname "$(readlink -f "$0")"); N=${1:?NUM}; ROLE=${2:-coder}
 PAR=${PIRUST_PARENT:-${HC_TERMINAL_ID:-}}
-read -r PIRUST_SPACE PIRUST_TAB < <(jq -r --arg t "$PAR" '.terminals[]|select(.address==$t)|"\(.labels["herdr.space"]//"") \(.labels["herdr.tab"]//"")"' ~/.local/state/herdr-core/default/terminals.json 2>/dev/null) || true
 W=$("$D/wt" create "$N")
 T=$("$D/gh-bot" issue view "$N" --json title,body,comments -q '"\(.title)\n\n\(.body)\n\n## Comments\n\([.comments[]|select(.author.login!="pirust-bot" or (.body|test("^(Handoff|cc )")|not))|"- \(.body)"]|join("\n"))"')
 "$D/ticket" set "$N" -s "In progress" -c "$ROLE@pirust-$N"
-hc run --bg --outlive-parent --no-notify --parent "$PAR" --name "pirust-$N" --keep --label project=pirust ${PIRUST_SPACE:+--label herdr.space=$PIRUST_SPACE --label herdr.tab=$PIRUST_TAB} --label "ticket=$N" --label "role=$ROLE" --cwd "$W" "$ROLE" "Ticket #$N $T"
+hc run --bg --outlive-parent --no-notify --parent "$PAR" --name "pirust-$N" --label project=pirust --label "ticket=$N" --label "role=$ROLE" --cwd "$W" "$ROLE" "Ticket #$N $T"
