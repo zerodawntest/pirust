@@ -4,7 +4,6 @@
 # Prints issue number. Repo is fixed: zerodawntest/pirust.
 set -euo pipefail
 D=$(dirname "$(readlink -f "$0")"); B=$D/board.json; R=zerodawntest/pirust
-GH_TOKEN=$("$D/gh-app-token"); export GH_TOKEN
 fid(){ jq -r --arg f "$1" '.fields[$f].id' "$B"; }
 oid(){ jq -r --arg f "$1" --arg o "$2" '.fields[$f].options[$o] // error("bad \($f): \($o)")' "$B"; }
 valid(){ jq -e --arg f "$1" --arg o "$2" '.fields[$f].options[$o] != null' "$B" >/dev/null; }
@@ -22,12 +21,32 @@ item(){
   local q; q="mutation{ addProjectV2ItemById(input:{projectId:\"$(jq -r .project "$B")\", contentId:\"$nid\"}){ item{ id } } }"
   gh api graphql -f query="$q" --jq .data.addProjectV2ItemById.item.id 2>/dev/null || { sleep 2; gh api graphql -f query="$q" --jq .data.addProjectV2ItemById.item.id; }
 }
+validate_ticket(){ # new ticket body in $1; return non-zero + message when unscoped
+  local b=$1
+  # Files: line (optional markdown list marker) with 1-5 space-separated paths.
+  local fl
+  fl=$(printf '%s\n' "$b" | sed -nE 's/^[[:space:]]*([-*][[:space:]]+)?Files:[[:space:]]+//p' | head -1)
+  [ -n "$fl" ] || { echo 'ticket new: body must have a Files: line with 1-5 paths' >&2; return 1; }
+  local -a paths; read -r -a paths <<<"$fl"
+  { [ "${#paths[@]}" -ge 1 ] && [ "${#paths[@]}" -le 5 ]; } || { echo "ticket new: Files: must list 1-5 paths (got ${#paths[@]})" >&2; return 1; }
+  # ## Acceptance section is required.
+  printf '%s\n' "$b" | grep -qE '^##[[:space:]]+Acceptance([[:space:]]|$)' || { echo 'ticket new: body must have a ## Acceptance section' >&2; return 1; }
+  # ## Acceptance needs a Verify: line: a backticked command plus a non-empty expected result.
+  local v
+  v=$(printf '%s\n' "$b" | awk '/^##[[:space:]]+Acceptance([[:space:]]|$)/{a=1;next}/^##[[:space:]]/{a=0}a&&/Verify:[[:space:]]+`[^`]+`[[:space:]]+[^[:space:]]/{f=1}END{print f+0}')
+  [ "$v" = 1 ] || { echo "ticket new: ## Acceptance must have a Verify: line (Verify: <command> <expected result>)" >&2; return 1; }
+}
 cmd=${1:-}; shift || true
 case $cmd in
 new)
   T='' K=Task P='' L='' S=Backlog PR='' SZ='' BODY=''
   while getopts t:k:p:l:s:P:S:b: o; do case $o in t)T=$OPTARG;; k)K=$OPTARG;; p)P=$OPTARG;; l)L=$OPTARG;; s)S=$OPTARG;; P)PR=$OPTARG;; S)SZ=$OPTARG;; b)BODY=$OPTARG;; *)usage;; esac; done
   [ "$BODY" = - ] && BODY=$(cat); BODY=$(printf '%b' "$BODY")
+  # Reject unscoped tickets (no Files:/no ## Acceptance) before touching GitHub.
+  validate_ticket "$BODY" || exit 1
+  # L/XL are not allowed: split into S/M tickets.
+  { [ "$SZ" != L ] && [ "$SZ" != XL ]; } || { echo "ticket new: size $SZ not allowed: split into S/M tickets" >&2; exit 1; }
+  GH_TOKEN=$("$D/gh-app-token"); export GH_TOKEN
   TYPE=$K; [ "$K" = Epic ] && { TYPE=; L=${L:+$L,}epic; }
   args=(-f title="$T" -f body="$BODY"); [ -n "$TYPE" ] && args+=(-f type="$TYPE")
   for l in ${L//,/ }; do args+=(-f "labels[]=$l"); done
@@ -45,7 +64,7 @@ new)
   I=$(item "$N" "$NID"); setsel "$I" Status "$S"; [ -n "$PR" ] && setsel "$I" Priority "$PR"; [ -n "$SZ" ] && setsel "$I" Size "$SZ"
   echo "$N" ;;
 set)
-  N=$1; shift; I=$(item "$N")
+  N=$1; shift; GH_TOKEN=$("$D/gh-app-token"); export GH_TOKEN; I=$(item "$N")
   while getopts s:P:S:c: o; do case $o in s)setsel "$I" Status "$OPTARG";; P)setsel "$I" Priority "$OPTARG";; S)setsel "$I" Size "$OPTARG";; c)settxt "$I" "Claimed by" "$OPTARG";; *)usage;; esac; done ;;
 *) usage ;;
 esac
