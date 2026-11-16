@@ -21,5 +21,5 @@ args=(
   --bind "$W" "$W" --ro-bind /dev/null "$W/.git" --chdir "$W"
   --setenv HOME "$H" --setenv CARGO_HOME "$H/.cargo" --setenv PIG_CODING_AGENT_DIR "$H/.pig/agent"
 )
-for v in GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN SSH_AUTH_SOCK GPG_AGENT_INFO DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR HC_TERMINAL_ID HC_TERMINAL_SOCKET HC_SCOPE GIT_CONFIG_COUNT; do args+=(--unsetenv "$v"); done
+for v in GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN SSH_AUTH_SOCK GPG_AGENT_INFO DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR HC_TERMINAL_SOCKET GIT_CONFIG_COUNT; do args+=(--unsetenv "$v"); done
 exec bwrap "${args[@]}" "$@"

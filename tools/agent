@@ -3,6 +3,6 @@
 set -euo pipefail
 D=$(dirname "$(readlink -f "$0")"); N=${1:?NUM}; ROLE=${2:-coder}
 W=$("$D/wt" create "$N")
-T=$("$D/gh-bot" issue view "$N" --json title,body -q '"\(.title)\n\n\(.body)"')
+T=$("$D/gh-bot" issue view "$N" --json title,body,comments -q '"\(.title)\n\n\(.body)\n\n## Comments\n\([.comments[]|select(.author.login!="pirust-bot" or (.body|test("^(Handoff|cc )")|not))|"- \(.body)"]|join("\n"))"')
 "$D/ticket" set "$N" -s "In progress" -c "$ROLE@pirust-$N"
-hc run --bg --name "pirust-$N" --label project=pirust --label "ticket=$N" --label "role=$ROLE" --cwd "$W" "$ROLE" "Ticket #$N $T"
+hc run --bg --outlive-parent --name "pirust-$N" --label project=pirust --label "ticket=$N" --label "role=$ROLE" --cwd "$W" "$ROLE" "Ticket #$N $T"

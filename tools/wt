@@ -14,7 +14,9 @@ create)
   [ -d "$W" ] || g worktree add -q -B "$BR" "$W" "origin/$B"
   echo "$W" ;;
 finish)
+  [ -d "$W" ] || { echo "no-worktree"; exit 0; }
   cd "$W"
+  if [ ! -f HANDOFF.md ] && [ -z "$(git status --porcelain)" ] && [ -n "$("$D/gh-bot" pr list --head "$BR" --state all --json number -q '.[0].number')" ]; then echo "already-finished"; exit 0; fi
   H=$(cat HANDOFF.md 2>/dev/null || true); rm -f HANDOFF.md
   [ -n "$H" ] || H="(no HANDOFF.md)"
   git add -A
