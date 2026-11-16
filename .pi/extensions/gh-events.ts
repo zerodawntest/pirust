@@ -78,7 +78,7 @@ export default function (pi: ExtensionAPI) {
 				try {
 					const type = String(req.headers["x-github-event"] ?? "");
 					const p = JSON.parse(body);
-					if (p.sender?.login === BOT && type !== "push") return; // own ticket-tool echoes
+					if (p.sender?.login === BOT) return; // own actions (scripts push/ticket as the bot)
 					const line = await summarize(type, p);
 					if (line) pi.sendMessage({ customType: "gh-event", content: `[gh] ${line}`, display: true }, { triggerTurn: true, deliverAs: "followUp" });
 				} catch {}
