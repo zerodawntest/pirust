@@ -19,16 +19,25 @@ finish)
   if [ ! -f HANDOFF.md ] && [ -z "$(git status --porcelain)" ] && [ -n "$("$D/gh-bot" pr list --head "$BR" --state all --json number -q '.[0].number')" ]; then echo "already-finished"; exit 0; fi
   H=$(cat HANDOFF.md 2>/dev/null || true); rm -f HANDOFF.md
   [ -n "$H" ] || H="(no HANDOFF.md)"
-  git add -A
-  if git diff --cached --quiet; then
+  # An agent may commit its own work (e.g. resolving a rebase conflict), so
+  # "no changes" = nothing staged AND no commits ahead of origin/$B (#63).
+  g fetch -q origin "$B"; git add -A
+  staged=0; git diff --cached --quiet || staged=1
+  ahead=$(git rev-list --count "origin/$B..HEAD")
+  if [ "$staged" = 0 ] && [ "$ahead" = 0 ]; then
     "$D/gh-bot" issue comment "$N" -b "Agent finished without changes. Handoff: $H" >/dev/null
     echo "no-changes"; exit 0
   fi
   J=$("$D/gh-bot" issue view "$N" --json title,issueType -q '{t:.title,k:(.issueType.name//"Task")}' 2>/dev/null || echo '{"t":"ticket","k":"Task"}')
   T=$(jq -r .t <<<"$J"); K=$(jq -r .k <<<"$J")
   case $K in Bug) TY=fix;; Feature) TY=feat;; *) TY=chore;; esac
-  git commit -qS -m "$TY(#$N): $T" -m "$H" -m "Refs #$N"
-  g fetch -q origin "$B"; git rebase -q "origin/$B"
+  [ "$staged" = 1 ] && git commit -qS -m "$TY(#$N): $T" -m "$H" -m "Refs #$N" # already committed by the agent
+  if ! git rebase -q "origin/$B"; then
+    C=$(git diff --name-only --diff-filter=U | paste -sd, -)
+    git rebase --abort
+    "$D/gh-bot" issue comment "$N" -b "Blocked: rebase onto $B conflicts in ${C:-unknown}; nothing pushed, worktree restored. Handoff: $H" >/dev/null
+    echo "rebase-conflict ${C:-unknown}"; exit 2
+  fi
   git push -q -f origin "$BR"
   P=$("$D/gh-bot" pr list --head "$BR" --json number -q '.[0].number')
   [ -n "$P" ] || P=$("$D/gh-bot" pr create --base "$B" --head "$BR" --title "$TY(#$N): $T" --body $'Closes #'"$N"$'\n\n'"$H" | grep -oE '[0-9]+$')
