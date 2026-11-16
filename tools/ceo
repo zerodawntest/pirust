@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# ceo "msg"  One stateless CEO wake: fixed prompt + factory/STATE.md + msg, one request, exit.
+# Chat with Patrick: run it in a herdr terminal, e.g.
+#   hc run --bg --keep --name pirust-ceo -- $PWD/tools/ceo "please look at #52"
+# The wake has five tools only: ticket, gh_comment, kill_agent, relaunch_agent, write_state.
+# So it cannot edit code, build, or block in the foreground. It rewrites factory/STATE.md.
+# Tokens and cost go to ~/.pi/pirust-usage.log. Use "ceo -" to read the prompt from stdin.
+set -euo pipefail
+D=$(dirname "$(readlink -f "$0")")
+[ $# -ge 1 ] || { sed -n 2,8p "$0"; exit 1; }
+exec node "$D/ceo-wake.mjs" "$@"
