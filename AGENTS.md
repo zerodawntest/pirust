@@ -15,12 +15,13 @@ GitHub access: GitHub App `pirust-bot` (App ID 5790484), installed on `zerodawnt
 
 # Orchestrator rules (enforced)
 
-- Keep going autonomously. Do not stop after reports.
-- Before high-level tickets or big decisions: create/update a ticket, tag @Patrick-Kappen (label `needs:patrick`), and work on other things meanwhile.
+- Keep going autonomously. Never stop to wait for Patrick; there is always a next item (see Next work).
+- Patrick action = ticket, then continue. Label `needs:patrick`, mention @Patrick-Kappen, body starts with `## Action for Patrick` listing exact steps (click path/command) and what it unblocks. Needed for: high-level tickets, big decisions, permissions/auth, model changes, merge to `main`.
+- Next work, in order: act on `[gh]` events → unblock agents → Ready tickets by priority → refine Backlog → draft pending ADR/RFC → improve tooling/checklist. Max 3 tickets In progress per agent pool.
 - The final PR into `main` is Patrick's to review/merge. Everything else (integration branch, agent PRs) the team handles.
 - The orchestrator does not write code; agents do.
 - Never block in the foreground (no `hc wait`, sleep, watch, builds). Run in `hc run --bg`; results arrive as messages.
-- `tools/gh-watch` (terminal `pirust-gh-watch`) pushes issue/PR/board changes as `[gh-watch]` messages: act on them.
+- Never poll and never use `hc send` for notifications. GitHub events arrive via `.pi/extensions/gh-events.ts` (webhook push) as `[gh]` messages: act on them.
 - Merges: fast-forward only to keep signatures (GitHub rebase-merge strips them).
 
 # Environment (verified 2026-11-16)
@@ -30,8 +31,9 @@ GitHub access: GitHub App `pirust-bot` (App ID 5790484), installed on `zerodawnt
 - NixOS with impermanence: `/` is tmpfs, `/tmp` and `~/.cache` are wiped on reboot. Persistent: `~/private` (this repo), `~/Documents` (keys), `~/.pig`, `~/.config/herdr-*`, `~/.local/state/herdr-core`, `~/.ssh`, `~/.config/gh`. Anything that must survive goes in the repo, `~/.pig` or a persisted path, never `/tmp`.
 - Process runner: herdr. `herdr-core` (`hc`) runs persistent terminals; `herdr-app` is the window only. Read `hc --skill` before starting agents/services.
   - Agents: `hc run --bg --name <n> --cwd <worktree> pig --model ibm-next/qwen38-flash-next --thinking low "<task>"`, interactive (never `-p`). Task goes in the `run`, not a later send.
-  - Waiting: `hc wait <t>` / `hc wait --children any|all` / `hc wait <t> --output X`. Never sleep or poll. Reports arrive as `<hc from=...>` messages (A2A via `hc send $HC_TERMINAL_ID`).
-  - Slow work (builds, tests, `gh run watch`): `hc run --bg --rm --no-notify --name <n> ...` then `hc wait`.
+  - Completion: rely on hc's automatic finish notification to the parent (do not pass `--no-notify`). Never `hc wait` in the foreground, never sleep/poll.
+  - Agents write their result to `HANDOFF.md` (≤3 lines) in the worktree; `tools/wt` posts it to the ticket. Agents do not message the orchestrator.
+  - Slow work (builds, tests): `hc run --bg --rm --name <n> ...`; finish notification arrives as a message. CI results arrive as `[gh]` events.
   - Templates (`~/.config/herdr-core/templates/<role>.md`) define agent roles; `hc events --label` streams state for scripts; labels tag terminals by ticket.
   - `hc ls` shows other projects' terminals: only touch terminals we started; clean up with `hc kill` + `hc rm`. Never `hc server stop/restart`.
   - Remote: `hc run|exec|file --on <machine>` (Meridian not yet added as hc machine).
