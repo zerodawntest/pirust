@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # next-ready: prints the highest-priority Ready, unclaimed ticket number (empty if none).
+# One dispatcher only (ticket #108): the stopgap loop. Any other caller (gh-events `launchNext`)
+# gets no ticket and a success exit, so it cannot launch an agent in a second, unordered flow.
 set -euo pipefail
+[[ ${PIRUST_DISPATCHER:-} == stopgap ]] || exit 0
 D=$(dirname "$(readlink -f "$0")")
 "$D/gh-bot" api graphql -f query='query{organization(login:"zerodawntest"){projectV2(number:2){items(first:100){nodes{content{...on Issue{number state}} s:fieldValueByName(name:"Status"){...on ProjectV2ItemFieldSingleSelectValue{name}} p:fieldValueByName(name:"Priority"){...on ProjectV2ItemFieldSingleSelectValue{name}} c:fieldValueByName(name:"Claimed by"){...on ProjectV2ItemFieldTextValue{text}}}}}}}' \
   --jq '[.data.organization.projectV2.items.nodes[]|select(.content.state=="OPEN" and .s.name=="Ready" and ((.c.text//"")==""))|{n:.content.number,p:(.p.name//"P9")}]|sort_by(.p)|.[0].n // empty'

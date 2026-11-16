@@ -3,6 +3,14 @@
 set -euo pipefail
 D=$(dirname "$(readlink -f "$0")"); N=${1:?NUM}; ROLE=${2:-coder}
 PAR=${PIRUST_PARENT:-${HC_TERMINAL_ID:-}}
+# WIP cap (ticket #108): count the live agent terminals, named `pirust-<num>`, before any worktree,
+# board write, or GitHub call, so a second dispatcher cannot start an over-WIP fleet.
+WIP=${PIRUST_WIP:-4}
+live=$(hc ls --json | jq -r '[if type=="array" then .[] else (.terminals // [])[] end | select((.name? // "") | test("^pirust-[0-9]+$"))] | length')
+if [ "${live:-0}" -ge "$WIP" ]; then
+  printf 'WIP limit %s reached\n' "$WIP" >&2
+  exit 1
+fi
 W=$("$D/wt" create "$N")
 T=$("$D/gh-bot" issue view "$N" --json title,body,comments -q '"\(.title)\n\n\(.body)\n\n## Comments\n\([.comments[]|select(.author.login!="pirust-bot" or (.body|test("^(Handoff|cc )")|not))|"- \(.body)"]|join("\n"))"')
 "$D/ticket" set "$N" -s "In progress" -c "$ROLE@pirust-$N"
