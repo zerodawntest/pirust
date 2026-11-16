@@ -254,15 +254,6 @@ export default function (pi: ExtensionAPI) {
 		});
 	});
 
-	// Orchestrator token budget: compact at 25% context; state lives in factory/STATE.md + tickets.
-	pi.on("agent_end", async (_e, ctx) => {
-		const u = ctx.getContextUsage?.();
-		const w = ctx.model?.contextWindow;
-		if (!u?.tokens || !w || u.tokens / w < 0.25) return;
-		log(`compact at ${u.tokens}/${w}`);
-		ctx.compact({ customInstructions: "Keep only: open decisions, what Patrick asked last, running agents/tickets, rules violated and fixed. Everything else is in factory/STATE.md, AGENTS.md and the board." });
-	});
-
 	pi.on("session_shutdown", async () => {
 		clearTimeout(timer);
 		for (const k of kids.splice(0)) k.kill();
