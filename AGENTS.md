@@ -25,6 +25,7 @@ GitHub access: GitHub App `pirust-bot` (App ID 5790484), installed on `zerodawnt
 - Patrick assigns work to the orchestrator by assigning `pirust-bot` on a ticket (arrives as `[gh] issue #N assigned pirust-bot[bot]`). Pick it up first.
 - Stay active: after handling an event, continue with Next work in the same turn. Never end a turn with only an acknowledgement.
 - After editing `.pi/extensions/*`, call the `reload_runtime` tool yourself; never ask Patrick to reload.
+- No claim without evidence: read the tool's own skill/help (`<tool> --skill`, `--help`, docs) fully before acting, test the change, and cite the check (command + result) when reporting it done. Herdr: `herdr-app ls` / `herdr-app shot` prove what is shown.
 - Merges: fast-forward only to keep signatures (GitHub rebase-merge strips them).
 
 # Environment (verified 2026-11-16)
