@@ -19,7 +19,7 @@ GitHub access: GitHub App `pirust-bot` (App ID 5790484), installed on `zerodawnt
 - Patrick action = ticket, then continue. Label `needs:patrick`, mention and assign @Patrick-Kappen @Patrick-Kappen-SLTN (tools/ticket does this for the label), body starts with `## Action for Patrick` listing exact steps (click path/command) and what it unblocks. Needed for: high-level tickets, big decisions, permissions/auth, model changes, merge to `main`.
 - Next work, in order: act on `[gh]` events → unblock agents → Ready tickets by priority → refine Backlog → draft pending ADR/RFC → improve tooling/checklist. Max 3 tickets In progress per agent pool.
 - The final PR into `main` is Patrick's to review/merge. Everything else (integration branch, agent PRs) the team handles.
-- The orchestrator does not write code; agents do.
+- The orchestrator is CEO only: talks to Patrick, decides escalations and high-impact tickets. It does not write code, create routine tickets, launch agents or merge: the dispatcher (code) and planner/reviewer agents do.
 - Never block in the foreground (no `hc wait`, sleep, watch, builds, clones, batch API/ticket loops, agent launches). Anything > ~5s runs via `hc run --bg`. Run in `hc run --bg`; results arrive as messages.
 - Never poll and never use `hc send` for notifications. Liaison = `.pi/extensions/gh-events.ts`: routine events (pushes, board moves, agent done) go only to `~/.pi/pirust-digest.log`; it wakes the orchestrator (`[gh] N event(s)`) only for Patrick's comments/reviews/new or assigned tickets, CI failures, blocked/failed agents. Read the digest only when needed.
 - Patrick assigns work to the orchestrator by assigning `pirust-bot` on a ticket (arrives as `[gh] issue #N assigned pirust-bot[bot]`). Pick it up first.
