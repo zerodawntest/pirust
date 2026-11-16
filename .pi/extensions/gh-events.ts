@@ -6,7 +6,8 @@ import { spawn, execFile, execFileSync, type ChildProcess } from "node:child_pro
 import { createServer, type Server } from "node:http";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { appendFileSync, readFileSync, readdirSync, watch as fsWatch } from "node:fs";
+import { appendFileSync, readFileSync, readdirSync, existsSync, watch as fsWatch } from "node:fs";
+import { addSessionLines, budget, isBusy, newTotals } from "../../tools/agent-budget.mjs";
 const log = (s: string) => { try { appendFileSync(`${homedir()}/.pi/gh-events.log`, `${new Date().toISOString()} ${s}\n`); } catch {} };
 
 const REPO = "zerodawntest/pirust";
@@ -87,8 +88,9 @@ export default function (pi: ExtensionAPI) {
 	const busy = new Set<string>();
 	const watch = new Map<string, ReturnType<typeof setTimeout>>();
 	// Fail-fast monitor: session file writes are the heartbeat (fs.watch, no polling).
+	// Keyed by session file, so a relaunch on the same worktree starts on a fresh budget (#53).
 	const SESS = `${homedir()}/.pig/sandbox/agent/sessions`;
-	const mon = new Map<string, { off: number; tok: number; cr: number; calls: string[]; stall?: ReturnType<typeof setTimeout> }>();
+	const mon = new Map<string, ReturnType<typeof newTotals> & { stall?: ReturnType<typeof setTimeout> }>();
 	const termOf = (n: string) => [...tickets].find(([, v]) => v === n)?.[0];
 	const kill = (term: string | undefined, why: string) => {
 		if (!term || handled.has(term)) return;
@@ -98,30 +100,25 @@ export default function (pi: ExtensionAPI) {
 	const onSession = (file: string) => {
 		const n = file.match(/pirust-wt-(\d+)--/)?.[1];
 		if (!n) return;
-		const m = mon.get(n) ?? { off: 0, tok: 0, cr: 0, calls: [] };
-		mon.set(n, m);
+		const m = mon.get(file) ?? newTotals();
+		mon.set(file, m);
 		let txt = "";
 		try {
 			const b = readFileSync(`${SESS}/${file}`);
 			txt = b.subarray(m.off).toString();
 			m.off = b.length;
 		} catch { return; }
-		for (const line of txt.split("\n")) {
-			try {
-				const e = JSON.parse(line);
-				if (e.type !== "message" || e.message?.role !== "assistant") continue;
-				const u = e.message.usage ?? {};
-				m.tok += (u.input ?? 0) + (u.output ?? 0);
-				m.cr += u.cacheRead ?? 0;
-				for (const c of e.message.content ?? []) if (c.type === "toolCall") m.calls.push(c.name + JSON.stringify(c.arguments));
-			} catch {}
-		}
-		m.calls = m.calls.slice(-4);
+		addSessionLines(m, txt);
 		const term = termOf(n);
+		const d = budget(m);
+		if (d.action === "kill") return kill(term, d.reason!);
+		if (d.action === "steer" && term) {
+			execFile("hc", ["send", term, d.reason!], () => {});
+			digest(`${n} steered: ${d.reason}`);
+		}
 		clearTimeout(m.stall);
-		if (m.calls.length === 4 && m.calls.every((c) => c === m.calls[0])) return kill(term, "loop: same tool call 4x");
-		if (m.tok > 400_000 || m.cr > 3_000_000) return kill(term, `budget: ${m.tok} in+out, ${m.cr} cache`);
-		m.stall = setTimeout(() => kill(termOf(n), "stalled 5 min"), 5 * 60_000);
+		// The agent is done when its last message is text with no tool call: sitting idle is then normal, not a stall.
+		if (isBusy(m)) m.stall = setTimeout(() => kill(termOf(n), "stalled 5 min"), 5 * 60_000);
 	};
 	const watchSessions = () => {
 		try {
