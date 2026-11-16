@@ -5,6 +5,8 @@ import { spawn, execFile, execFileSync, type ChildProcess } from "node:child_pro
 import { createServer, type Server } from "node:http";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
+import { appendFileSync } from "node:fs";
+const log = (s: string) => { try { appendFileSync(`${homedir()}/.pi/gh-events.log`, `${new Date().toISOString()} ${s}\n`); } catch {} };
 
 const REPO = "zerodawntest/pirust";
 const ORG = "zerodawntest";
@@ -56,13 +58,16 @@ async function summarize(type: string, p: any): Promise<string | undefined> {
 	return undefined;
 }
 
+log("module loaded");
 export default function (pi: ExtensionAPI) {
+	log("factory called");
 	let server: Server | undefined;
 	const kids: ChildProcess[] = [];
 
 	pi.on("session_start", async (_e, ctx) => {
 		let cwd = "";
 		try { cwd = realpathSync(ctx.cwd); } catch {}
+		log(`session_start cwd=${cwd} server=${!!server}`);
 		if (cwd !== `${homedir()}/private/pirust` || server) return;
 
 		server = createServer((req, res) => {
@@ -85,6 +90,8 @@ export default function (pi: ExtensionAPI) {
 			const env = adminEnv();
 			const run = (args: string[]) => {
 				const k = spawn("gh", ["webhook", "forward", ...args, `--url=${url}`], { stdio: ["ignore", "ignore", "pipe"], env });
+				k.on("exit", (c) => log(`gh exit ${c} ${args[0]}`));
+				k.stderr?.on("data", (d) => log(`stderr ${String(d).trim()}`));
 				k.stderr?.on("data", (d) => /error/i.test(String(d)) && ctx.ui.notify(`gh-events: ${String(d).trim()}`, "warning"));
 				kids.push(k);
 			};
