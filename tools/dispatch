@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# dispatch launch           launch coders on the highest-priority Ready tickets (max 5 running, skip file overlaps)
+# dispatch review PR        launch a reviewer on PR #PR (it writes REVIEW.md in the worktree; the liaison reads it)
+# dispatch merge N          reviewer approved #N: rebase onto integration, ff-merge, close the ticket, rm the worktree
+# dispatch relaunch N       changes requested on #N: post the review on the ticket, relaunch a coder there
+# dispatch plan N           Patrick approved a needs:patrick ticket: a planner creates the follow-up tickets
+# Git and GitHub writes all happen here: agents run in tools/sandbox (no git, no gh).
+set -euo pipefail
+D=$(dirname "$(readlink -f "$0")"); R=$(dirname "$D"); G=$D/gh-bot; B=integration
+WT=$HOME/private/pirust-wt           # one worktree per ticket (tools/wt)
+INT=$HOME/private/pirust-int        # integration worktree, used only for the ff-merge
+REVIEWER=${PIRUST_REVIEWER:-reviewer}
+PLANNER=${PIRUST_PLANNER:-planner}
+MAX=${PIRUST_MAX_AGENTS:-5}
+DIGEST=${PIRUST_DIGEST:-$HOME/.pi/pirust-digest.log}
+PAR=${PIRUST_PARENT:-${HC_TERMINAL_ID:-}}
+mkdir -p "$HOME/.pi" 2>/dev/null || true
+usage(){ sed -n 2,8p "$0"; exit 1; }
+note(){ printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >> "$DIGEST"; }
+has(){ local x; for x in $2; do [ "$x" = "$1" ] && return 0; done; return 1; }
+any(){ local x; for x in $1; do has "$x" "$2" && return 0; done; return 1; }
+tfiles(){ # tfiles N  -> space-separated files the ticket names (its `Files:` line)
+  local s
+  s=$("$G" issue view "$1" --json body -q .body 2>/dev/null) || true
+  s=$(printf '%s\n' "$s" | sed -n 's/^[[:space:]]*Files:[[:space:]]*//Ip' | head -n1)
+  s=${s//"(new)"/}
+  s=$(printf '%s' "$s" | sed -E 's/\(after #[0-9]+\)//g; s/[`*]/ /g; s/,/ /g; s/[[:space:]]+/ /g; s/ \.$//')
+  printf '%s' "$s"
+}
+cmd=${1:-}; shift || true
+case $cmd in
+launch)
+  # Tickets a coder session runs on: <proj>-gpt-<id> (a template launch, the ticket is in its labels)
+  # or <proj>-gpt-<proj>-<ticket>-<hex> (a direct sandbox launch). One line = one running agent.
+  S=$(hc ls --json 2>/dev/null) || true
+  running=$(sed -nE 's#^.+/(pi|pig)-gpt-[^ ]+-(pi|pig)?-?[0-9]+-[0-9a-f]{8}$#-#g' <<<"$S" | tr '\n' ' ')
+  ready=$(
+    "$G" api graphql -f query='query{organization(login:"zerodawntest"){projectV2(number:2){items(first:100){nodes{content{...on Issue{number state}} s:fieldValueByName(name:"Status"){...on ProjectV2ItemFieldSingleSelectValue{name}} p:fieldValueByName(name:"Priority"){...on ProjectV2ItemFieldSingleSelectValue{name}} c:fieldValueByName(name:"Claimed by"){...on ProjectV2ItemFieldTextValue{text}}}}}}}' \
+      --jq '[.data.organization.projectV2.items.nodes[]|select(.content.state=="OPEN" and .s.name=="Ready" and ((.c.text//"")==""))|{n:.content.number,p:(.p.name//"P9")}]|sort_by(.p)|.[].n' 2>/dev/null
+  ) || true
+  taken=""
+  for n in $ready; do
+    [ "${#running}" -lt "$MAX" ] || break
+    case " $running " in *" $n "*) continue;; esac
+    f=$(tfiles "$n")
+    # Two agents in the same files break each other's PR: leave that ticket for the next round.
+    if [ -n "$f" ] && [ -n "$taken" ] && any "$f" "$taken"; then note "dispatch: skip #$n (files already taken)"; continue; fi
+    if "$D/agent" "$n" >/dev/null 2>&1; then note "dispatch: launched #$n"; running="$running -"; taken="$taken $f"
+    else note "dispatch: launch of #$n failed"; fi
+  done
+  ;;
+review)
+  p=${1:?PR}
+  read -r n head <<<"$("$G" pr view "$p" --json number,headRefName -q '[.number,.headRefName]|@tsv' 2>/dev/null)" || true
+  w=$WT/${n:-?}
+  { [ -n "$n" ] && [ "$head" = "t/$n" ] && [ -d "$w" ]; } || { note "dispatch: review PR #$p needs worktree $w (blocked)"; exit 1; }
+  d=$("$G" pr diff "$p" 2>/dev/null) || true
+  prompt="You are a pirust reviewer. Review PR #$p (branch $head, worktree $w) against its ticket.
+- Diff of the PR:
+\`\`\`
+$d
+\`\`\`
+- Check: only the files the ticket names changed; the verifications it lists were run; no new dependencies; comments only where code is not obvious.
+- Write $w/REVIEW.md, max 5 lines. Line 1 is exactly \`APPROVE\` or starts with \`CHANGES:\` then what to fix and why.
+- Do not change code, do not use git or gh, do not message anyone. Then stop."
+  hc run --bg --outlive-parent --no-notify --parent "$PAR" --name "pirust-review-$n" --keep --label project=pirust --label "ticket=$n" --label role=reviewer --cwd "$w" "$REVIEWER" "$prompt"
+  note "dispatch: reviewer launched on PR #$p (#$n)"
+  ;;
+merge)
+  n=${1:?N}
+  w=$WT/$n
+  [ -d "$w" ] || { echo "no worktree $w" >&2; exit 1; }
+  git -C "$R" fetch -q origin "$B"
+  # Rebase the branch onto integration first, then fast-forward, so the agent's signed commits keep their signatures.
+  git -c commit.gpgsign=true -C "$w" rebase -q "origin/$B" || { git -C "$w" rebase --abort 2>/dev/null || true; note "dispatch: rebase of #$n failed"; exit 1; }
+  head=$(git -C "$w" rev-parse --short "t/$n")
+  [ -d "$INT" ] || git -C "$R" worktree add -q -B "$B" "$INT" "origin/$B"
+  git -C "$INT" merge --ff-only -q "t/$n"
+  git -C "$R" push -q origin "$B"
+  "$G" issue comment "$n" -b "Merged into \`integration\` ($head). Closes #$n." >/dev/null
+  "$D/ticket" set "$n" -s Integration
+  "$G" issue close "$n" >/dev/null
+  "$D/ticket" set "$n" -s Done
+  "$D/wt" rm "$n"
+  note "dispatch: merged #$n ($head)"
+  ;;
+relaunch)
+  n=${1:?N}
+  w=$WT/$n
+  [ -s "$w/REVIEW.md" ] || { echo "no $w/REVIEW.md" >&2; exit 1; }
+  r=$(tr '\n' ' ' <"$w/REVIEW.md")
+  "$G" issue comment "$n" -b "Review requests changes: $r" >/dev/null
+  "$D/agent" "$n" >/dev/null
+  note "dispatch: relaunched coder #$n (REVIEW.md)"
+  ;;
+plan)
+  n=${1:?N}
+  t=$("$G" issue view "$n" --json title -q .title 2>/dev/null) || true
+  b=$("$G" issue view "$n" --json body -q .body 2>/dev/null) || true
+  # The planner creates tickets, so it runs in the main checkout: tools/sandbox blocks gh and the app key.
+  hc run --bg --outlive-parent --no-notify --parent "$PAR" --name "pirust-plan-$n" --keep --label project=pirust --label "ticket=$n" --label role=planner --cwd "$R" "$PLANNER" "Ticket #$n $t
+$b
+You are the planner. Create the follow-up tickets with $D/ticket (one per work item, scoped, Files: line set, -s Ready, -P P1, -S S/M, -b with the full instruction). Write HANDOFF.md, max 3 lines. Do not write code."
+  note "dispatch: planner launched on #$n"
+  ;;
+*) usage ;;
+esac
