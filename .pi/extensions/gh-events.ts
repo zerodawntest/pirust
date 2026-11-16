@@ -1,6 +1,7 @@
 // Push GitHub repo + board events into the orchestrator session (main checkout only). No polling:
 // gh webhook forward (websocket) -> local HTTP -> pi.sendMessage.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { spawn, execFile, execFileSync, type ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { realpathSync } from "node:fs";
@@ -19,7 +20,8 @@ const adminEnv = () => {
 		return process.env;
 	}
 };
-const REPO_EVENTS = "issues,issue_comment,pull_request,pull_request_review,pull_request_review_comment,check_suite,workflow_run,push";
+const REPO_EVENTS = "issues,issue_comment,pull_request,pull_request_review,pull_request_review_comment,check_suite,workflow_run";
+const DEBOUNCE_MS = 10_000;
 
 const gql = (id: string) =>
 	new Promise<string>((res) =>
@@ -46,8 +48,6 @@ async function summarize(type: string, p: any): Promise<string | undefined> {
 			return p.action === "completed" && p.check_suite.conclusion !== "success" ? `checks ${p.check_suite.conclusion} on ${p.check_suite.head_branch}` : undefined;
 		case "workflow_run":
 			return p.action === "completed" ? `workflow ${p.workflow_run.name} ${p.workflow_run.conclusion} on ${p.workflow_run.head_branch}` : undefined;
-		case "push":
-			return `push ${p.ref.replace("refs/heads/", "")} by ${who}: ${p.commits?.length ?? 0} commit(s)${p.forced ? " FORCED" : ""}`;
 		case "projects_v2_item": {
 			const f = p.changes?.field_value;
 			if (p.action !== "edited" || !f) return undefined;
@@ -63,6 +63,32 @@ export default function (pi: ExtensionAPI) {
 	log("factory called");
 	let server: Server | undefined;
 	const kids: ChildProcess[] = [];
+	const seen = new Set<string>();
+	const queue: string[] = [];
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let reloadRequested = false;
+	const flush = () => {
+		if (!queue.length) return;
+		const lines = queue.splice(0);
+		pi.sendMessage({ customType: "gh-event", content: `[gh] ${lines.length} event(s)\n${lines.join("\n")}`, display: true }, { triggerTurn: true, deliverAs: "followUp" });
+	};
+
+	pi.registerCommand("reload-runtime", { description: "Reload extensions", handler: async (_a, ctx) => { await ctx.reload(); } });
+	pi.registerTool({
+		name: "reload_runtime",
+		label: "Reload Runtime",
+		description: "Reload extensions/skills/context files after this response (use after editing .pi/extensions).",
+		parameters: Type.Object({}),
+		async execute() {
+			reloadRequested = true;
+			return { content: [{ type: "text", text: "Reload after this response." }], details: {}, terminate: true };
+		},
+	});
+	pi.on("agent_settled", () => {
+		if (!reloadRequested) return;
+		reloadRequested = false;
+		pi.sendUserMessage("/reload-runtime", { expandPromptTemplates: true });
+	});
 
 	pi.on("session_start", async (_e, ctx) => {
 		let cwd = "";
@@ -76,11 +102,16 @@ export default function (pi: ExtensionAPI) {
 			req.on("end", async () => {
 				res.end("ok");
 				try {
-					const type = String(req.headers["x-github-event"] ?? "");
+					const id = String(req.headers["x-github-delivery"] ?? "");
+					if (id && seen.has(id)) return;
+					if (id) seen.add(id);
 					const p = JSON.parse(body);
-					if (p.sender?.login === BOT) return; // own actions (scripts push/ticket as the bot)
-					const line = await summarize(type, p);
-					if (line) pi.sendMessage({ customType: "gh-event", content: `[gh] ${line}`, display: true }, { triggerTurn: true, deliverAs: "followUp" });
+					if (p.sender?.login === BOT) return; // own actions
+					const line = await summarize(String(req.headers["x-github-event"] ?? ""), p);
+					if (!line || queue.includes(line)) return;
+					queue.push(line);
+					clearTimeout(timer);
+					timer = setTimeout(flush, DEBOUNCE_MS);
 				} catch {}
 			});
 		});
@@ -102,6 +133,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
+		clearTimeout(timer);
 		for (const k of kids.splice(0)) k.kill();
 		server?.close();
 		server = undefined;
