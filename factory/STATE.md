@@ -1,4 +1,6 @@
-# Orchestrator state (resume here)
+# Orchestrator state (resume here; skill factory-recover)
+- 00:16 CEO: all on pi (Patrick). Docs rewritten: factory/README.md, runtime.md, design.md (4 old docs deleted, 1078 words). Skills in .agents/skills (5, proven discovered by pi get_commands). Baseline in ~/.pi/pirust-usage.log (t1nm 423 req $16.10, 18 guard blocks).
+- P0 order sent to driver: PR 93 keepalive + PR 95 review merge, stop gate, 91 watchdog, ceo-guard mention bug, agents on pi, 92 lessons, tools/merge, 84 drills. t1nm restart needed after 93 + stop gate land (Patrick-visible).
 - Driver brief: factory/driver.md. Liaison/dispatcher in t1nm (gh-events.ts) stalled ~23:00 → driver dispatched/finished by hand; #86 keepalive fixes it.
 - ff-merge recipe: hc run --bg bash fn `ff PR TICKET CHECK` (rebase on integration in ~/.pig/cache/merge-N, %G? check, push t/N + integration). Logged as `PRnn ...` in digest.
 - 2026-11-17 00:05 merged + Done: 80 66 77 64 59 85 88 89 90.
