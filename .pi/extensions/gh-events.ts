@@ -1,7 +1,7 @@
 // Push GitHub repo + board events into the orchestrator session (main checkout only). No polling:
 // gh webhook forward (websocket) -> local HTTP -> pi.sendMessage.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { spawn, execFile, type ChildProcess } from "node:child_process";
+import { spawn, execFile, execFileSync, type ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -9,6 +9,14 @@ import { homedir } from "node:os";
 const REPO = "zerodawntest/pirust";
 const ORG = "zerodawntest";
 const BOT = "pirust-bot[bot]";
+const ADMIN = "Patrick-Kappen-SLTN"; // org admin; webhooks need admin rights
+const adminEnv = () => {
+	try {
+		return { ...process.env, GH_TOKEN: execFileSync("gh", ["auth", "token", "-u", ADMIN], { encoding: "utf8" }).trim() };
+	} catch {
+		return process.env;
+	}
+};
 const REPO_EVENTS = "issues,issue_comment,pull_request,pull_request_review,pull_request_review_comment,check_suite,workflow_run,push";
 
 const gql = (id: string) =>
@@ -74,8 +82,9 @@ export default function (pi: ExtensionAPI) {
 		server.listen(0, "127.0.0.1", () => {
 			const port = (server!.address() as any).port;
 			const url = `http://127.0.0.1:${port}/`;
+			const env = adminEnv();
 			const run = (args: string[]) => {
-				const k = spawn("gh", ["webhook", "forward", ...args, `--url=${url}`], { stdio: ["ignore", "ignore", "pipe"] });
+				const k = spawn("gh", ["webhook", "forward", ...args, `--url=${url}`], { stdio: ["ignore", "ignore", "pipe"], env };
 				k.stderr?.on("data", (d) => /error/i.test(String(d)) && ctx.ui.notify(`gh-events: ${String(d).trim()}`, "warning"));
 				kids.push(k);
 			};
