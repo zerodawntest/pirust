@@ -1,0 +1,79 @@
+- `auto-commit-on-exit.ts` Auto-commits uncommitted changes on session shutdown using the last assistant message as the commit message. Factory: no — our agents are sandboxed and never git; commits are the orchestrator's job.
+- `bash-spawn-hook.ts` Adds a `spawnHook` to the bash tool to mutate command/cwd/env before execution (sources profile, sets an env flag). Factory: yes — wrap agent bash to source env and inject per-ticket env vars.
+- `bookmark.ts` `/bookmark` labels the last assistant message via `setLabel` for navigation in `/tree`. Factory: no — human-facing session navigation, not relevant to automated agents.
+- `border-status-editor.ts` Custom editor that draws a bordered frame with left/right texts fitted to terminal width. Factory: no — cosmetic editor skin, no factory need.
+- `built-in-tool-renderer.ts` Re-registers built-in read/bash/edit/write with compact custom `renderCall`/`renderResult` (e.g. diff stats, exit code) without changing behavior. Factory: yes — shrink tool-output verbosity in agent sessions to save tokens/costs.
+- `claude-rules.ts` Scans `.claude/rules/` and lists rule files in the system prompt so the agent reads them on demand. Factory: no — we use AGENTS.md/skills, not Claude rules.
+- `commands.ts` `/commands` lists all available slash commands via `pi.getCommands()`. Factory: no — introspection demo, not needed on the factory floor.
+- `confirm-destructive.ts` Prompts for confirmation before destructive session actions (clear/switch/branch) using `before_*` events. Factory: no — agents are non-interactive; we want no confirmation gates in agents.
+- `custom-compaction.ts` Replaces default compaction with a full-context summary on a cheaper model, discarding old turns. Factory: yes — reduce context/cache cost on long agent sessions.
+- `custom-footer.ts` `ctx.ui.setFooter()` with git branch and extension statuses plus token stats. Factory: no — cosmetic footer; only useful in interactive sessions.
+- `custom-header.ts` `ctx.ui.setHeader()` replacing the built-in header with a pi mascot. Factory: no — purely cosmetic.
+- `custom-provider-anthropic/` Registers a custom provider (custom API id, `streamSimple`, OAuth + API-key auth, two models). Factory: yes — template for wiring a new LLM provider/endpoint for agents.
+- `custom-provider-gitlab-duo/` GitLab Duo provider (Claude/GPT via GitLab AI Gateway) delegating to built-in streaming; includes a test script. Factory: no — we are not on GitLab; useful only as a provider pattern reference.
+- `debug-provider.ts` `/debug-provider` captures raw provider request/response events into expandable session entries. Factory: yes — debug agent model calls without a human reading every tool call.
+- `dirty-repo-guard.ts` Blocks session changes when there are uncommitted git changes. Factory: no — our agents never touch git.
+- `doom-overlay/` Play DOOM as an overlay (WASM doomgeneric, bundled WAD, real-time ~35 FPS). Factory: no — demo of overlay rendering only.
+- `dynamic-resources/` `resources_discover` event to add skillPaths and prompt/resource files at runtime. Factory: yes — attach per-ticket skills/prompts to an agent session dynamically.
+- `dynamic-tools.ts` Registers tools after session start, and adds more at runtime via a command. Factory: yes — add per-ticket tools to an agent on demand.
+- `entry-renderer.ts` `registerEntryRenderer` renders durable extension data in chat without sending it to the LLM. Factory: yes — surface state (e.g. ticket status) in the UI without spending agent tokens.
+- `event-bus.ts` `pi.events` for inter-extension communication (emit/listen). Factory: yes — decouple factory extensions (e.g. ticket events → notifications) via a shared bus.
+- `file-trigger.ts` Watches a trigger file and injects its contents into the conversation. Factory: yes — feed external work items into a running agent session.
+- `git-checkpoint.ts` Git-stash checkpoints each turn so `/fork` can restore code state. Factory: no — git workflow for interactive devs; agents don't touch git.
+- `github-issue-autocomplete.ts` Preloads open GitHub issues and adds `#...` autocomplete. Factory: no — needs `gh` + repo access, an orchestrator concern, not for agents.
+- `git-merge-and-resolve.ts` Merges upstream into the working branch each turn and feeds conflicts back to the agent. Factory: no — git workflow; our agents are git-isolated.
+- `gondolin/` Runs pi's built-in tools inside a local Gondolin micro-VM with the cwd mounted at `/workspace`. Factory: yes — sandbox agents' file/bash access off the host.
+- `handoff.ts` `/handoff` extracts what matters into a new focused session's prompt (drafted for review). Factory: yes — create a fresh, context-minimal session per next task.
+- `hello.ts` Minimal custom tool (`hello`) via `defineTool`. Factory: no — tutorial only.
+- `hidden-thinking-label.ts` `setHiddenThinkingLabel()` for the label shown when thinking blocks are hidden. Factory: no — cosmetic.
+- `inline-bash.ts` Expands inline `!{cmd}` in user prompts with command output before sending. Factory: no — interactive-input sugar.
+- `input-transform-streaming.ts` Input gate that prepends `git diff --stat` context, skipping the work during low-latency steering. Factory: no — dev-workflow, git-based.
+- `input-transform.ts` `input` event to rewrite user prompts (`?quick`, `ping`→`pong`, `time`) without an LLM call. Factory: yes — intercept/rewrite agent prompts and answer trivial commands cheaply.
+- `interactive-shell.ts` Runs interactive commands (vim, git rebase -i, htop) with full terminal access. Factory: no — for interactive users, not headless agents.
+- `jev-router.ts` Virtual model routing between strong (planning) and cheap (implementation) models after the first edit. Factory: yes — model routing to cut cost, exactly our low-thinking coding-agent goal.
+- `mac-system-theme.ts` Syncs pi theme with macOS dark/light appearance. Factory: no — macOS-only cosmetic.
+- `message-renderer.ts` `registerMessageRenderer` for custom-styled custom messages. Factory: no — cosmetic.
+- `minimal-mode.ts` Overrides built-in tools for a "minimal" display mode (call only, no output). Factory: yes — cut tool-output noise to save tokens in agent sessions.
+- `modal-editor.ts` Vim-like modal editing editor extension. Factory: no — interactive editor only.
+- `model-status.ts` `model_select` hook shows model changes in the status bar. Factory: no — cosmetic.
+- `notify.ts` Native terminal notification when the agent is done and waiting (OSC 777/99, Windows toast). Factory: yes — notify the orchestrator on agent completion without polling.
+- `overlay-qa-tests.ts` Comprehensive overlay positioning/edge-case tests. Factory: no — testing demos.
+- `overlay-test.ts` Validates overlay compositing with inline text inputs. Factory: no — testing demo.
+- `permission-gate.ts` Confirms before dangerous bash (rm -rf, sudo, chmod 777). Factory: yes — enforce safety on agent bash calls.
+- `pirate.ts` `before_agent_start` edits the system prompt to toggle pirate mode. Factory: yes — pattern for injecting/modifying the system prompt dynamically (persona/rules).
+- `plan-mode/` Read-only exploration mode (`/plan`): disables write tools, allowlists read-only bash, tracks numbered plan steps. Factory: yes — safe design/plan sessions with a cheap model, write tools off.
+- `preset.ts` Named presets (model, thinking level, tools, prompt) from JSON, activated via CLI/`/preset`/Ctrl+Shift+U. Factory: yes — per-role profiles (coder/reviewer/architect) as presets.
+- `project-trust.ts` Demonstrates the `project_trust` event. Factory: yes — gate loading of project skills/prompts until trusted.
+- `prompt-customizer.ts` `systemPromptOptions` to add context-aware prompt sections for active tools/skills. Factory: yes — tailor agent system prompts per role.
+- `protected-paths.ts` Blocks write/edit to protected paths (.env, .git/, node_modules). Factory: yes — enforce isolation on agent file access.
+- `provider-payload.ts` `before_provider_request`/`after_provider_response` logging (and optionally mutating) the raw payload. Factory: yes — audit model traffic off the agent's sight; debug/cache analysis.
+- `qna.ts` `/qna` extracts questions from the last assistant message into the editor. Factory: no — interactive prompt-generator demo.
+- `questionnaire.ts` `questionnaire` tool for single/multi questions with tab navigation. Factory: no — interactive; agents are non-interactive.
+- `question.ts` `question` tool with options + inline "type something" editor. Factory: no — interactive; agents are non-interactive.
+- `rainbow-editor.ts` Highlights "ultrathink" with an animated rainbow. Factory: no — cosmetic.
+- `README.md` Docs index for the examples. Factory: no — index, not an extension.
+- `reload-runtime.ts` `ctx.reload()` via command and an LLM-callable reload tool. Factory: yes — reload extensions/skills/prompts/context for a running agent (per our rules).
+- `rpc-demo.ts` Exercises all RPC-supported extension UI methods (select/confirm/input/editor/notify/setStatus/setWidget/setTitle). Factory: yes — basis for driving agent UI over RPC; inspect via `herdr-app`.
+- `send-user-message.ts` `pi.sendUserMessage()` for sending user/steer/follow-up messages from extensions. Factory: yes — inject steer/follow-up messages into agent sessions.
+- `session-name.ts` `setSessionName`/`getSessionName` for friendly session names. Factory: yes — label sessions per ticket/role.
+- `shutdown-command.ts` `/quit` command and a tool calling `ctx.shutdown()`. Factory: yes — clean agent shutdown from code.
+- `snake.ts` Snake game via `/snake`. Factory: no — game demo.
+- `space-invaders.ts` Space Invaders via `/invaders` (Kitty keyboard protocol). Factory: no — game demo.
+- `ssh.ts` Delegates read/write/edit/bash to a remote host over SSH. Factory: yes — run an agent's tools on a remote machine (e.g. Meridian).
+- `status-line.ts` `ctx.ui.setStatus()` for persistent footer text (turn progress). Factory: no — cosmetic.
+- `structured-output.ts` `terminate: true` so the agent ends on a tool call, saving a follow-up LLM turn. Factory: yes — force structured final output and cut cost.
+- `subagent/` `subagent` tool: spawn isolated `pi` processes per task; single/parallel/chain modes with per-agent configs. Factory: yes — core pattern for launching and orchestrating our agent team.
+- `summarize.ts` Summarizes the session into a rendered report. Factory: yes — generate a compact handoff summary to save tokens.
+- `system-prompt-header.ts` Status widget showing the effective system-prompt length via `ctx.getSystemPrompt()`. Factory: yes — measure prompt/cache size for cost control.
+- `tic-tac-toe.ts` Tic-tac-toe demonstrating `executionMode: "sequential"` on tools. Factory: yes — reference for serializing tool calls; not game-relevant.
+- `timed-confirm.ts` Timed confirm/select dialogs with countdown and AbortSignal. Factory: yes — auto-timeout on agent confirmations to prevent indefinite blocking.
+- `titlebar-spinner.ts` Braille spinner in the terminal title while the agent works. Factory: no — cosmetic.
+- `todo.ts` `todo` tool + `/todos`, state in tool-result details for correct branching. Factory: yes — per-session task list for agents (ticket checklist).
+- `tool-override.ts` Overrides `read` to log access and block `.env`-style paths. Factory: yes — auditing + access control on agent tools.
+- `tools.ts` `/tools` to enable/disable tools interactively, persisted per branch. Factory: yes — restrict an agent's toolset (least privilege).
+- `trigger-compact.ts` Triggers compaction above a 100k-token threshold. Factory: yes — auto-compact long agent sessions to control cost.
+- `truncated-tool.ts` `rg` tool with proper output truncation (50KB/2000 lines) spilling full output to a temp file. Factory: yes — keep large tool output out of agent context (saves tokens).
+- `widget-placement.ts` `setWidget` with above/below-editor placement. Factory: no — cosmetic.
+- `with-deps/` Example extension with its own npm deps (uses `ms`), tests jiti resolving from the extension's node_modules. Factory: yes — reference for shipping an extension with its own dependencies.
+- `working-indicator.ts` `setWorkingIndicator()` to customize the streaming working indicator. Factory: no — cosmetic.
+- `working-message-test.ts` Sets a custom working message/indicator to verify persistence across loader recreations. Factory: no — cosmetic persistence test.
