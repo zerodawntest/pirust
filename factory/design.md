@@ -15,11 +15,11 @@ Principle: the LLM only writes code and judges. Checks, dispatch, review routing
 |---|---|
 | Lead stops with work left | `agent_before_settle` stop gate: runs `tools/next-work` (Ready, open PRs, idle slots, done agents unfinished); if non-empty returns a hidden message + `continue: true`, max 3 per turn ("Stop Hook Auto-Continue", agentic-patterns.com) |
 | Idle after compaction | `ctx.compact({onComplete})` and `session_compact` → followUp "re-read STATE.md, continue" |
-| Context grows | reset, not compaction (Anthropic, Effective harnesses for long-running agents): write STATE.md ≤15 lines, `ctx.newSession` at 60k context / 40 requests |
+| Context grows | reset in process, no LLM summary: `turn_end` returns a `compaction` draft entry (summary = STATE.md or ticket+HANDOFF) + `continue: true`; `session_before_compact` returns the same summary for pi's own compactions (session-format.md, compaction.md) |
 | Not reading docs | `before_agent_start` injects factory/runtime.md + lessons (deterministic text, cache-safe); `tool_call` blocks known mistakes (factory/lessons.json) |
 | CEO writes code, foreground waits | ceo-guard `tool_call` block |
 | Agent scope, git, loops | agent-guard: edits only in the ticket's `Files:`, git blocked, same call 3× blocked |
-| Agent too long | agent-guard step limit (20 calls / 40% context / 120k weighted) → `handoff` tool (`terminate: true`) → `ctx.newSession` with ticket + HANDOFF; 3 refreshes → blocked, planner splits |
+| Agent too long | #106: at the step limit `setActiveTools(["handoff"])` + `tool_call` block; strict handoff tool (`constrainedSampling`, lint in execute, throw on invalid); text reply → `context_edit` remove + continue (2×) → extension writes HANDOFF itself; then compaction reset in process. 3 refreshes → blocked, needs:split |
 | Bad handoff | `agent_before_settle`: tools/check (tests, lint of touched files); fail → hidden message + continue, max 2; `Status: done` needs `Verified: cmd -> result` |
 | Review | on finish: tools/review picks the area reviewer; verdict tool; nobody else is woken |
 | Bad extension | tools/extcheck (`pi --mode rpc --no-session -e`) before any reload |
