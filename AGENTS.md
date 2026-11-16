@@ -19,6 +19,9 @@ GitHub access: GitHub App `pirust-bot` (App ID 5790484), installed on `zerodawnt
 - Before high-level tickets or big decisions: create/update a ticket, tag @Patrick-Kappen (label `needs:patrick`), and work on other things meanwhile.
 - The final PR into `main` is Patrick's to review/merge. Everything else (integration branch, agent PRs) the team handles.
 - The orchestrator does not write code; agents do.
+- Never block in the foreground (no `hc wait`, sleep, watch, builds). Run in `hc run --bg`; results arrive as messages.
+- `tools/gh-watch` (terminal `pirust-gh-watch`) pushes issue/PR/board changes as `[gh-watch]` messages: act on them.
+- Merges: fast-forward only to keep signatures (GitHub rebase-merge strips them).
 
 # Environment (verified 2026-11-16)
 

@@ -13,7 +13,7 @@ item(){ # issue number -> project item id (adds if missing)
   local nid; nid=$(gh api repos/$R/issues/$1 --jq .node_id)
   local q="mutation{ addProjectV2ItemById(input:{projectId:\"$(jq -r .project "$B")\", contentId:\"$nid\"}){ item{ id } } }"
   gh api graphql -f query="$q" --jq .data.addProjectV2ItemById.item.id 2>/dev/null || { sleep 2; gh api graphql -f query="$q" --jq .data.addProjectV2ItemById.item.id; }; }
-cmd=$1; shift
+cmd=${1:-}; shift || true
 case $cmd in
 new)
   T= K=Task P= L= S=Backlog PR= SZ= BODY=

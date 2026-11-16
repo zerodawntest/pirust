@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# gh-watch TARGET_TERMINAL [INTERVAL=60]
+# Diffs repo events + board Status/Claimed; sends one-line changes to TARGET via hc send.
+set -uo pipefail
+D=$(dirname "$(readlink -f "$0")"); B=$D/board.json; R=zerodawntest/pirust
+T=$1; I=${2:-60}; S=$HOME/.pig/pirust-watch; mkdir -p "$S"
+Q='query($p:ID!){node(id:$p){...on ProjectV2{items(first:100){nodes{content{...on Issue{number title}...on PullRequest{number title}}
+ s:fieldValueByName(name:"Status"){...on ProjectV2ItemFieldSingleSelectValue{name}}
+ c:fieldValueByName(name:"Claimed by"){...on ProjectV2ItemFieldTextValue{text}}}}}}}'
+while :; do
+  export GH_TOKEN=$("$D/gh-app-token") || { sleep "$I"; continue; }
+  msg=
+  last=$(cat "$S/last_event" 2>/dev/null || echo 0)
+  ev=$(gh api "repos/$R/events?per_page=50" 2>/dev/null) && {
+    new=$(jq -r --arg l "$last" '[.[]|select((.id|tonumber)>($l|tonumber))]|reverse|.[]|
+      "\(.type|sub("Event$";"")) \(.payload.action//"") #\(.payload.issue.number//.payload.pull_request.number//.payload.ref//"") \(.actor.login): \((.payload.issue.title//.payload.pull_request.title//.payload.comment.body//"")|.[0:80]|gsub("\n";" "))"' <<<"$ev")
+    [ -n "$new" ] && msg+="$new"$'\n'
+    jq -r '.[0].id//empty' <<<"$ev" | grep . > "$S/last_event.tmp" && mv "$S/last_event.tmp" "$S/last_event"; }
+  snap=$(gh api graphql -f query="$Q" -f p="$(jq -r .project "$B")" --jq '.data.node.items.nodes[]|select(.content.number)|"#\(.content.number) \(.s.name//"-") \(.c.text//"")"' 2>/dev/null | sort) && {
+    [ -f "$S/board" ] && { d=$(diff "$S/board" <(echo "$snap") | grep '^>' | sed 's/^> /board /'); [ -n "$d" ] && msg+="$d"$'\n'; }
+    echo "$snap" > "$S/board"; }
+  [ -n "$msg" ] && [ "$last" != 0 ] && hc send "$T" "[gh-watch] ${msg%$'\n'}" >/dev/null 2>&1
+  sleep "$I"
+done
