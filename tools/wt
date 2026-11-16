@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# wt create NUM          worktree ~/private/pirust-wt/NUM on branch t/NUM from origin/integration
+# wt finish NUM          HANDOFF.md -> ticket comment; signed commit, push, PR to integration, In review
+# wt rm NUM              remove worktree + local branch
+# Agents never run this; the orchestrator/extension does.
+set -euo pipefail
+D=$(dirname "$(readlink -f "$0")"); R=$(dirname "$D"); B=integration
+cmd=${1:-}; N=${2:-}; [[ $N =~ ^[0-9]+$ ]] || { sed -n 2,5p "$0"; exit 1; }
+W=$HOME/private/pirust-wt/$N; BR=t/$N
+g(){ git -C "$R" "$@"; }
+case $cmd in
+create)
+  g fetch -q origin "$B"
+  [ -d "$W" ] || g worktree add -q -B "$BR" "$W" "origin/$B"
+  echo "$W" ;;
+finish)
+  cd "$W"
+  H=$(cat HANDOFF.md 2>/dev/null || true); rm -f HANDOFF.md
+  [ -n "$H" ] || H="(no HANDOFF.md)"
+  git add -A
+  if git diff --cached --quiet; then
+    "$D/gh-bot" issue comment "$N" -b "Agent finished without changes. Handoff: $H" >/dev/null
+    echo "no-changes"; exit 0
+  fi
+  J=$("$D/gh-bot" issue view "$N" --json title,issueType -q '{t:.title,k:(.issueType.name//"Task")}' 2>/dev/null || echo '{"t":"ticket","k":"Task"}')
+  T=$(jq -r .t <<<"$J"); K=$(jq -r .k <<<"$J")
+  case $K in Bug) TY=fix;; Feature) TY=feat;; *) TY=chore;; esac
+  git commit -qS -m "$TY(#$N): $T" -m "$H" -m "Refs #$N"
+  g fetch -q origin "$B"; git rebase -q "origin/$B"
+  git push -q -f origin "$BR"
+  P=$("$D/gh-bot" pr list --head "$BR" --json number -q '.[0].number')
+  [ -n "$P" ] || P=$("$D/gh-bot" pr create --base "$B" --head "$BR" --title "$TY(#$N): $T" --body $'Closes #'"$N"$'\n\n'"$H" | grep -oE '[0-9]+$')
+  "$D/gh-bot" issue comment "$N" -b "Handoff: $H (PR #$P)" >/dev/null
+  "$D/ticket" set "$N" -s "In review"
+  echo "pr=$P" ;;
+rm)
+  g worktree remove --force "$W" 2>/dev/null || true
+  g branch -D "$BR" >/dev/null 2>&1 || true ;;
+*) sed -n 2,5p "$0"; exit 1 ;;
+esac

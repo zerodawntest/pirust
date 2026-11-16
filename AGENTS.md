@@ -21,7 +21,10 @@ GitHub access: GitHub App `pirust-bot` (App ID 5790484), installed on `zerodawnt
 - The final PR into `main` is Patrick's to review/merge. Everything else (integration branch, agent PRs) the team handles.
 - The orchestrator does not write code; agents do.
 - Never block in the foreground (no `hc wait`, sleep, watch, builds). Run in `hc run --bg`; results arrive as messages.
-- Never poll and never use `hc send` for notifications. GitHub events arrive via `.pi/extensions/gh-events.ts` (webhook push) as `[gh]` messages: act on them.
+- Never poll and never use `hc send` for notifications. GitHub events arrive via `.pi/extensions/gh-events.ts` (webhook push, bot/push events dropped, batched 10s) as one `[gh] N event(s)` message: act on them.
+- Patrick assigns work to the orchestrator by assigning `pirust-bot` on a ticket (arrives as `[gh] issue #N assigned pirust-bot[bot]`). Pick it up first.
+- Stay active: after handling an event, continue with Next work in the same turn. Never end a turn with only an acknowledgement.
+- After editing `.pi/extensions/*`, call the `reload_runtime` tool yourself; never ask Patrick to reload.
 - Merges: fast-forward only to keep signatures (GitHub rebase-merge strips them).
 
 # Environment (verified 2026-11-16)

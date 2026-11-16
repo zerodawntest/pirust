@@ -22,6 +22,7 @@ const adminEnv = () => {
 };
 const REPO_EVENTS = "issues,issue_comment,pull_request,pull_request_review,pull_request_review_comment,check_suite,workflow_run";
 const DEBOUNCE_MS = 10_000;
+const REPO_DIR = `${homedir()}/private/pirust`;
 
 const gql = (id: string) =>
 	new Promise<string>((res) =>
@@ -35,7 +36,7 @@ async function summarize(type: string, p: any): Promise<string | undefined> {
 	const t = (s?: string) => (s ?? "").replace(/\s+/g, " ").slice(0, 100);
 	switch (type) {
 		case "issues":
-			return `issue #${p.issue.number} ${p.action}${p.label ? ` ${p.label.name}` : ""} by ${who}: ${t(p.issue.title)}`;
+			return `issue #${p.issue.number} ${p.action}${p.label ? ` ${p.label.name}` : ""}${p.assignee ? ` ${p.assignee.login}` : ""} by ${who}: ${t(p.issue.title)}`;
 		case "issue_comment":
 			return p.action === "created" ? `comment #${p.issue.number} by ${who}: ${t(p.comment.body)}` : undefined;
 		case "pull_request":
@@ -71,6 +72,46 @@ export default function (pi: ExtensionAPI) {
 		if (!queue.length) return;
 		const lines = queue.splice(0);
 		pi.sendMessage({ customType: "gh-event", content: `[gh] ${lines.length} event(s)\n${lines.join("\n")}`, display: true }, { triggerTurn: true, deliverAs: "followUp" });
+	};
+
+	// Agent terminals (label project=pirust): on done/blocked/error/exit -> tools/wt finish, report in batch.
+	const handled = new Set<string>();
+	const tickets = new Map<string, string>();
+	const finishAgent = (term: string, why: string) => {
+		const n = tickets.get(term);
+		if (!n || handled.has(term)) return;
+		handled.add(term);
+		execFile(`${REPO_DIR}/tools/wt`, ["finish", n], { env: process.env }, (e, out, err) => {
+			queue.push(`agent #${n} ${why}: ${e ? `wt finish failed: ${String(err).trim().slice(-200)}` : out.trim()}`);
+			execFile("hc", ["kill", term], () => execFile("hc", ["rm", term], () => {}));
+			clearTimeout(timer);
+			timer = setTimeout(flush, 1000);
+		});
+	};
+	const watchAgents = () => {
+		const k = spawn("hc", ["events", "--json", "--label", "project=pirust"], { stdio: ["ignore", "pipe", "pipe"] });
+		kids.push(k);
+		let buf = "";
+		k.stdout!.on("data", (d) => {
+			buf += d;
+			let i;
+			while ((i = buf.indexOf("\n")) >= 0) {
+				const line = buf.slice(0, i);
+				buf = buf.slice(i + 1);
+				try {
+					const ev = JSON.parse(line)?.params;
+					if (!ev) continue;
+					const term = ev.terminal ?? ev.data?.address;
+					const t = ev.data?.labels?.ticket;
+					if (term && t) tickets.set(term, t);
+					if (ev.type !== "labels" && ev.type !== "foreground") log(`hc ${ev.type} ${term} ${JSON.stringify(ev.data).slice(0, 200)}`);
+					const st = ev.data?.status ?? ev.data?.word;
+					if (ev.type === "finished") finishAgent(term, `exited ${ev.data?.exit_code ?? ""}`);
+					else if (["done", "blocked", "error"].includes(st)) finishAgent(term, st);
+				} catch {}
+			}
+		});
+		k.on("exit", (c) => log(`hc events exit ${c}`));
 	};
 
 	pi.registerCommand("reload-runtime", { description: "Reload extensions", handler: async (_a, ctx) => { await ctx.reload(); } });
@@ -128,6 +169,7 @@ export default function (pi: ExtensionAPI) {
 			};
 			run([`--repo=${REPO}`, `--events=${REPO_EVENTS}`]);
 			run([`--org=${ORG}`, "--events=projects_v2_item"]);
+			watchAgents();
 			ctx.ui.setStatus("gh-events", "gh: live");
 		});
 	});
