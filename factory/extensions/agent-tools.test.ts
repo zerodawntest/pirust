@@ -6,7 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { handoffTool, HANDOFF_FILE, MAX_HANDOFF_LINES, type HandoffParams } from "./agent-tools.ts";
+import agentTools, { handoffTool, HANDOFF_FILE, MAX_HANDOFF_LINES, type HandoffParams } from "./agent-tools.ts";
+
+/** The handoff tool re-runs verified commands with `pi.exec`; give it a stand-in that always exits 0. */
+const fakePi = { exec: async () => ({ code: 0, stdout: "", stderr: "" }), registerTool: () => {} };
+agentTools(fakePi as never);
 
 /** Fresh worktree per test: `handoff` writes HANDOFF.md into the cwd, which is the agent's worktree. */
 function enterWorktree(): string {
@@ -15,7 +19,12 @@ function enterWorktree(): string {
 	return worktree;
 }
 
-const handoffParams: HandoffParams = { status: "done", done: "shipped handoff", next: "load it in tools/agent" };
+const handoffParams: HandoffParams = {
+	status: "done",
+	done: "shipped handoff",
+	next: "load it in tools/agent",
+	verified: [{ cmd: "node --test test/", result: "ok" }],
+};
 
 function handoff(params: HandoffParams) {
 	return handoffTool.execute("call-1", params, undefined, undefined, {} as never);
@@ -28,7 +37,7 @@ describe("handoff", () => {
 			status: "done",
 			done: "added the handoff tool",
 			next: "wire it into tools/agent",
-			verified: { "node --test factory/extensions/": "2 pass" },
+			verified: [{ cmd: "node --test factory/extensions/", result: "ok" }],
 		});
 
 		assert.equal(result.terminate, true);
@@ -37,11 +46,11 @@ describe("handoff", () => {
 			status: "done",
 			done: "added the handoff tool",
 			next: "wire it into tools/agent",
-			verified: { "node --test factory/extensions/": "2 pass" },
+			verified: [{ cmd: "node --test factory/extensions/", result: "ok" }],
 		});
 		assert.equal(
 			readFileSync(join(worktree, HANDOFF_FILE), "utf8"),
-			"Status: done\nDone: added the handoff tool\nVerified: node --test factory/extensions/ -> 2 pass\nNext: wire it into tools/agent\n",
+			"Status: done\nDone: added the handoff tool\nVerified: node --test factory/extensions/ -> ok\nNext: wire it into tools/agent\n",
 		);
 	});
 
@@ -57,16 +66,37 @@ describe("handoff", () => {
 		assert.ok(content.split("\n").length - 1 <= MAX_HANDOFF_LINES, "HANDOFF.md exceeds the line cap");
 	});
 
-	it("requires done, next and a known status", async () => {
+	it("requires done, next, a known status, and a verified command for done", async () => {
 		enterWorktree();
 		await assert.rejects(() => handoff({ status: "done", next: "x" } as HandoffParams), /handoff: done is required/);
 		await assert.rejects(() => handoff({ status: "done", done: "x" } as HandoffParams), /handoff: next is required/);
 		await assert.rejects(() => handoff({ status: "wip", done: "x", next: " " } as HandoffParams), /handoff: next is required/);
 		await assert.rejects(() => handoff({ status: "closed", done: "x", next: "y" } as HandoffParams), /status must be wip, done, or blocked/);
+		// done claims success: it needs a command the harness re-runs to exit 0.
+		await assert.rejects(() => handoff({ status: "done", done: "x", next: "y" } as HandoffParams), /needs ≥1 verified command/);
+	});
+
+	it("rejects a verified command that fails on re-run", async () => {
+		const worktree = enterWorktree();
+		// A false `done`: the harness re-runs the verified command and it exits nonzero.
+		const failing = { exec: async () => ({ code: 1, stdout: "", stderr: "" }), registerTool: () => {} };
+		agentTools(failing as never);
+		await assert.rejects(
+			() => handoff({ status: "done", done: "x", next: "y", verified: [{ cmd: "false", result: "ok" }] } as HandoffParams),
+			/verified command failed \(exit 1\): false/,
+		);
+	});
+
+	it("caps done and next at 200 chars", async () => {
+		enterWorktree();
+		const long = "x".repeat(201);
+		await assert.rejects(() => handoff({ status: "wip", done: long, next: "y" } as HandoffParams), /handoff: done exceeds 200 chars/);
+		await assert.rejects(() => handoff({ status: "wip", done: "x", next: long } as HandoffParams), /handoff: next exceeds 200 chars/);
 	});
 
 	it("ends the agent session on the handoff tool result, with no assistant message after it", async () => {
 		const worktree = enterWorktree();
+		agentTools(fakePi as never);
 		const sessionPath = join(worktree, "session.jsonl");
 		const messages: Record<string, unknown>[] = [
 			{ role: "user", content: [{ type: "text", text: "Ticket #73: add the handoff tool." }], timestamp: 1 },
@@ -108,6 +138,9 @@ describe("handoff", () => {
 		const entries = readFileSync(sessionPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { message?: { role?: string } });
 		assert.equal(entries.at(-1)?.message?.role, "toolResult", "session must end on the handoff tool result");
 		assert.equal(entries.filter((e) => e.message?.role === "assistant").length, 1, "no assistant message after the tool result");
-		assert.equal(readFileSync(join(worktree, HANDOFF_FILE), "utf8"), "Status: done\nDone: shipped handoff\nNext: load it in tools/agent\n");
+		assert.equal(
+			readFileSync(join(worktree, HANDOFF_FILE), "utf8"),
+			"Status: done\nDone: shipped handoff\nVerified: node --test test/ -> ok\nNext: load it in tools/agent\n",
+		);
 	});
 });
