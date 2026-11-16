@@ -173,7 +173,7 @@ export default function (pi: ExtensionAPI) {
 						watch.set(term, setTimeout(() => kill(term, "hard cap 30 min"), 30 * 60_000));
 					if (st === "working") busy.add(term);
 					if (ev.type === "finished") finishAgent(term, `exited ${ev.data?.exit_code ?? ""}`);
-					else if (st === "idle" && busy.has(term)) finishAgent(term, "done");
+					else if (st === "done" || (st === "idle" && busy.has(term))) finishAgent(term, "done");
 					else if (["blocked", "error"].includes(st)) finishAgent(term, st);
 				} catch {}
 			}
