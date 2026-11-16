@@ -8,3 +8,4 @@ devenv.local.nix
 .direnv
 result
 result-*
+/.pre-commit-config.yaml

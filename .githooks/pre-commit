@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Called by the central core.hooksPath hook. Config is a devenv-generated store symlink.
+run(){ exec prek run -c "$(readlink -f .pre-commit-config.yaml)"; }
+command -v prek >/dev/null && run
+exec devenv shell -- bash -c 'prek run -c "$(readlink -f .pre-commit-config.yaml)"'

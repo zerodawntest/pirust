@@ -23,6 +23,7 @@ new)
   args=(-f title="$T" -f body="$BODY"); [ -n "$TYPE" ] && args+=(-f type="$TYPE")
   for l in ${L//,/ }; do args+=(-f "labels[]=$l"); done
   J=$(gh api repos/$R/issues "${args[@]}"); N=$(jq -r .number <<<"$J"); ID=$(jq -r .id <<<"$J")
+  [[ ,$L, == *,needs:patrick,* ]] && gh api repos/$R/issues/$N/assignees -f "assignees[]=Patrick-Kappen" -f "assignees[]=Patrick-Kappen-SLTN" >/dev/null
   [ -n "$P" ] && gh api repos/$R/issues/$P/sub_issues -F sub_issue_id="$ID" >/dev/null
   I=$(item "$N"); setsel "$I" Status "$S"; [ -n "$PR" ] && setsel "$I" Priority "$PR"; [ -n "$SZ" ] && setsel "$I" Size "$SZ"
   echo "$N" ;;

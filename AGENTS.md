@@ -16,7 +16,7 @@ GitHub access: GitHub App `pirust-bot` (App ID 5790484), installed on `zerodawnt
 # Orchestrator rules (enforced)
 
 - Keep going autonomously. Never stop to wait for Patrick; there is always a next item (see Next work).
-- Patrick action = ticket, then continue. Label `needs:patrick`, mention @Patrick-Kappen, body starts with `## Action for Patrick` listing exact steps (click path/command) and what it unblocks. Needed for: high-level tickets, big decisions, permissions/auth, model changes, merge to `main`.
+- Patrick action = ticket, then continue. Label `needs:patrick`, mention and assign @Patrick-Kappen @Patrick-Kappen-SLTN (tools/ticket does this for the label), body starts with `## Action for Patrick` listing exact steps (click path/command) and what it unblocks. Needed for: high-level tickets, big decisions, permissions/auth, model changes, merge to `main`.
 - Next work, in order: act on `[gh]` events → unblock agents → Ready tickets by priority → refine Backlog → draft pending ADR/RFC → improve tooling/checklist. Max 3 tickets In progress per agent pool.
 - The final PR into `main` is Patrick's to review/merge. Everything else (integration branch, agent PRs) the team handles.
 - The orchestrator does not write code; agents do.
