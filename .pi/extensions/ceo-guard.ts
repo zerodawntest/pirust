@@ -19,7 +19,10 @@ const fingerprint = () => {
 		.map((n) => `${createHash("sha256").update(readFileSync(`${EXT_DIR}/${n}`)).digest("hex")}  .pi/extensions/${n}`)
 		.join("\n") + "\n";
 };
-const DOC_OK = /(^|\/)(AGENTS\.md|factory\/[^/]+\.md|docs\/adr\/[^/]+\.md)$/;
+const DOC_OK = /(^|\/)(AGENTS\.md|factory\/[^/]+\.md|docs\/adr\/[^/]+\.md|\.agents\/skills\/[^/]+\/SKILL\.md)$/;
+// Everyone runs on pi 1.5.1 (Patrick, 2026-11-17): no pig binary in commands, launch lines or docs.
+const PIG = /(^|[\s;&|(`/'"])pig(\s|$)/m;
+const PIG_MSG = "Use pi, not pig (Patrick). Agents: tools/sandbox . pi --model ibm-next/qwen38-flash-next ...";
 const SLOW = /\b(git clone|hc wait|sleep\s+([3-9]|\d\d)|cargo (build|test|nextest)|devenv shell|tools\/agent\b|watch\s)|for .*tools\/(ticket|gh-bot)/;
 const CODE_WRITE = /(sed -i|python3? -|cat\s*>|tee\s|>\s*\S*(tools|\.pi|\.github|src|crates)\/)/;
 const CODE_PATH = /(tools\/|\.pi\/|\.github\/|src\/|crates\/|devenv\.nix|devenv\.yaml)/;
@@ -41,11 +44,14 @@ export default function (pi: ExtensionAPI) {
 		if (!on) return;
 		const i = e.input ?? {};
 		if (e.toolName === "edit" || e.toolName === "write") {
+			const text = JSON.stringify(i.edits ?? i.content ?? "").replace(/\\n/g, "\n");
+			if (PIG.test(text)) return { block: true, reason: PIG_MSG };
 			if (!DOC_OK.test(String(i.path ?? ""))) return { block: true, reason: "CEO does not write code. Create or update a ticket; the dispatcher assigns an agent." };
 			return;
 		}
 		if (e.toolName !== "bash") return;
 		const cmd = String(i.command ?? "");
+		if (PIG.test(cmd)) return { block: true, reason: PIG_MSG };
 		const bg = /^\s*(PIRUST_PARENT=\S+\s+)?hc run --bg/.test(cmd);
 		if (!bg && SLOW.test(cmd)) return { block: true, reason: "Slow/blocking in foreground. Use: hc run --bg --rm --no-notify --name pirust-<x> -- bash -c '...'" };
 		if (!bg && CODE_WRITE.test(cmd) && CODE_PATH.test(cmd)) return { block: true, reason: "CEO does not write code (bash write into code path). Ticket it." };

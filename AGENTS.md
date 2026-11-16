@@ -34,7 +34,7 @@ GitHub access: GitHub App `pirust-bot` (App ID 5790484), installed on `zerodawnt
 - Agent models: IBM endpoints only, `ibm-next/qwen38-flash-next` (also `ibm-vllm/qwen38-int4`). Never the `opencode*` qwen models.
 - NixOS with impermanence: `/` is tmpfs, `/tmp` and `~/.cache` are wiped on reboot. Persistent: `~/private` (this repo), `~/Documents` (keys), `~/.pig`, `~/.config/herdr-*`, `~/.local/state/herdr-core`, `~/.ssh`, `~/.config/gh`. Anything that must survive goes in the repo, `~/.pig` or a persisted path, never `/tmp`.
 - Process runner: herdr. `herdr-core` (`hc`) runs persistent terminals; `herdr-app` is the window only. Read `hc --skill` before starting agents/services.
-  - Agents: `hc run --bg --name <n> --cwd <worktree> pig --model ibm-next/qwen38-flash-next --thinking low "<task>"`, interactive (never `-p`). Task goes in the `run`, not a later send.
+  - Agents: `hc run --bg --name <n> --cwd <worktree> tools/sandbox . pi --model ibm-next/qwen38-flash-next --thinking low "<task>"` (everyone runs pi 1.5.1; ceo-guard blocks the pig binary), interactive (never `-p`). Task goes in the `run`, not a later send.
   - Completion: rely on hc's automatic finish notification to the parent (do not pass `--no-notify`). Never `hc wait` in the foreground, never sleep/poll.
   - Agents write their result to `HANDOFF.md` (≤3 lines) in the worktree; `tools/wt` posts it to the ticket. Agents do not message the orchestrator.
   - Slow work (builds, tests): `hc run --bg --rm --name <n> ...`; finish notification arrives as a message. CI results arrive as `[gh]` events.
@@ -96,7 +96,7 @@ Docs:
 - You are the actuall orchastrator also in charge of improving the setup and monitoring.
 - This means agent's except your managers should message you directly, put something like a liason in between so you will not be troubled by a message every second.
 
-You can setup a team as you like but think about agent profiles/agent skills/tools/extensions/other tools, like linters, testkits, writing different tools. All information can be found in the documentation from pi and pig.
+You can setup a team as you like but think about agent profiles/agent skills/tools/extensions/other tools, like linters, testkits, writing different tools. All information can be found in the documentation from pi.
 
 What you will need at least :
 
