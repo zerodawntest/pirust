@@ -1,0 +1,22 @@
+{
+	"terminals": [
+		{
+			"address": "socket:/home/zerodawn/.local/state/herdr-core/t/pirust-77.sock",
+			"name": "pirust-77",
+			"labels": { "project": "pirust", "ticket": "77", "role": "coder" },
+			"status": { "state": "working" }
+		},
+		{
+			"address": "socket:/home/zerodawn/.local/state/herdr-core/t/pirust-78.sock",
+			"name": "pirust-78",
+			"labels": { "project": "pirust", "ticket": "78", "role": "coder" },
+			"status": { "state": "exited", "exit_code": 0 }
+		},
+		{
+			"address": "socket:/home/zerodawn/.local/state/herdr-core/t/other-9.sock",
+			"name": "other-9",
+			"labels": { "project": "other" },
+			"status": { "state": "exited", "exit_code": 1 }
+		}
+	]
+}

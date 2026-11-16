@@ -3,14 +3,19 @@
 // Start: hc run --bg --keep --name pirust-factory -- <this file>
 // Owns: the gh webhook stream (reconnect + API catch-up), the hc event stream (reconciled at
 // startup), the agent session monitor (loop, 5 min stall, budget), the dispatcher, the token
-// log, and the stateless CEO wakes (see ceo-wake.mjs).
+// log, and the CEO wakes (see ceo-wake.mjs). This file replaces the .pi/extensions/gh-events.ts
+// liaison: one implementation, so the agent guard and the monitor cannot drift apart.
+//
+// Everything a test needs is exported and takes its commands and paths as arguments, so
+// `node --test test/factory*.test.*` runs with fixtures, no child process and no network.
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync, watch as fsWatch } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ceoWake } from "./ceo-wake.mjs";
+import { addSessionLines, budget, isBusy, newTotals } from "./agent-budget.mjs";
+import { createCeoSession, IS_MAIN, STALL_MS } from "./ceo-wake.mjs";
 
 const TOOLS = dirname(process.realpathSync(import.meta.filename));
 const REPO = dirname(TOOLS);
@@ -45,8 +50,8 @@ const append = (f, s) => {
 };
 const log = (s) => append(DIGEST, `${ts()} ${s}\n`);
 const cut = (s, n = 100) => (s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
-const run = (file, args = []) => {
-	const r = spawnSync(file, args, { encoding: "utf8", maxBuffer: 8 << 20 });
+const run = (file, args = [], opts = {}) => {
+	const r = spawnSync(file, args, { encoding: "utf8", maxBuffer: 8 << 20, ...opts });
 	if (r.error) return { code: 1, out: "", err: cut(r.error.message, OUT_CAP) };
 	return { code: r.status ?? 1, out: cut(r.stdout, OUT_CAP), err: cut(r.stderr, OUT_CAP) };
 };
@@ -75,23 +80,17 @@ const seen = new Set(Array.isArray(saved.seen) ? saved.seen.slice(-5000) : []);
 const queue = new Set(Array.isArray(saved.queue) ? saved.queue.slice(-BATCH_MAX) : []);
 const launched = new Set(Array.isArray(saved.launched) ? saved.launched : []);
 const reviewed = new Set(Array.isArray(saved.reviewed) ? saved.reviewed : []);
-const inflight = new Set(Array.isArray(saved.inflight) ? saved.inflight : []);
-const tickets = new Map();
-const busy = new Set();
-const mon = new Map();
-const hardCap = new Map();
-const handled = new Set();
 let lastSeen = typeof saved.lastSeen === "string" ? saved.lastSeen : new Date(Date.now() - 30 * 60_000).toISOString();
 function persist() {
 	try {
-		writeFileSync(SPIN, JSON.stringify({ lastSeen, queue: [...queue], seen: [...seen].slice(-5000), launched: [...launched], reviewed: [...reviewed], inflight: [...inflight] }));
+		writeFileSync(SPIN, JSON.stringify({ lastSeen, queue: [...queue], seen: [...seen].slice(-5000), launched: [...launched], reviewed: [...reviewed] }));
 	} catch (e) {
 		console.error(`save: ${e?.message ?? e}`);
 	}
 }
 
 // ---- events: one line each, ≤160 chars, no tool or stderr dumps ----
-function summarize(type, p) {
+export function summarize(type, p) {
 	const who = p.sender?.login;
 	const t = (s) => cut(s, 100);
 	const n = (v) => v?.number ?? String(v?.url ?? "").match(/\/(?:issues|pull)\/(\d+)/)?.[1] ?? "?";
@@ -114,196 +113,282 @@ function summarize(type, p) {
 			const f = p.changes?.field_value;
 			if (p.action !== "edited" || !f) return undefined;
 			const to = f.to?.name ?? f.to ?? "";
-			return `board #${n(p.projects_v2_item?.content)} ${f.field_name} -> ${typeof to === "string" ? to : JSON.stringify(to)} by ${who}`;
+			return `board #${p.projects_v2_item?.content_node_id ?? "?"} ${f.field_name} -> ${typeof to === "string" ? to : JSON.stringify(to)} by ${who}`;
 		}
 	}
 }
 
+// A board event names its card by a GraphQL node id, not by a ticket number. `lookup` is
+// injected so the tests stay offline; it returns the ticket number, or "?" if unknown.
+export function resolveBoardRef(line, lookup) {
+	const m = line.match(/^board #(\S+) (.*)$/);
+	if (!m) return line;
+	return `#${lookup(m[1])} ${m[2]}`;
+}
+
+function ticketOfNode(nodeId) {
+	const r = ghApi("graphql", ["-f", `query=query{node(id:"${nodeId}"){...on Issue{number}...on PullRequest{number}}}`, "--jq", ".data.node.number"]);
+	return r.code ? "?" : r.out.trim() || "?";
+}
+
 // Who must be answered now; everything else goes to the digest.
-function escalates(type, p) {
+export function escalates(type, p) {
+	if (p.sender?.type !== "User") return false;
 	if (isPatrick(p.sender?.login)) return true;
 	if (type === "issues" && ["opened", "reopened"].includes(p.action)) return true;
 	return type === "issues" && p.action === "assigned" && p.assignee?.login === BOT_USER;
 }
 
-// ---- CEO: one stateless SDK wake per batch ----
-let flushTimer;
-function enqueue(lines) {
+/** The `## Relaunch` block a CEO writes on a ticket to get a coder started; pure, so it is testable. */
+export function relaunchTarget(body) {
+	const m = String(body ?? "").match(/^## Relaunch\s*\n[\s\S]*?\bticket:\s*(\d+)/);
+	if (!m) return undefined;
+	return { ticket: m[1], notes: cut(String(body).match(/notes:\s*(.+)/)?.[1], 80) };
+}
+
+/** `Closes #12` in a PR body: the ticket whose reviewer to launch. Pure, so it is testable. */
+export function closesTicket(body) {
+	return String(body ?? "").match(/Closes #(\d+)/)?.[1];
+}
+
+/**
+ * Dispatch (Ready → coder, PR → reviewer, approve → ff-merge) and the session-file monitor
+ * (loop, 5 min stall, budget). The budget math is tools/agent-budget.mjs, the same module the
+ * agents load, so one implementation. `runCmd` and `log`/`enqueue` are injectable.
+ */
+export function createAgentMonitor(options = {}) {
+	const o = {
+		runCmd: run,
+		log,
+		enqueue,
+		sessionsDir: SESS,
+		agentScript: AGENT,
+		wtScript: join(TOOLS, "wt"),
+		nextReadyScript: join(TOOLS, "next-ready"),
+		maxInflight: MAX_INFLIGHT,
+		relaunchEnv: { ...process.env, PIRUST_PARENT: process.env.HC_TERMINAL_ID ?? "" },
+		tickets: new Map(),
+		busy: new Set(),
+		mon: new Map(),
+		hardCap: new Map(),
+		handled: new Set(),
+		launched: new Set(),
+		inflight: new Set(),
+		...options,
+	};
+	const { tickets, busy, mon, hardCap, handled, launched, inflight } = o;
+	const termOf = (n) => [...tickets].find(([, v]) => v === n)?.[0];
+	const sessionTicket = (f) => f.match(/pirust-wt-(\d+)--/)?.[1];
+
+	function onSession(file) {
+		const n = sessionTicket(file);
+		if (!n) return;
+		const m = mon.get(file) ?? newTotals();
+		mon.set(file, m);
+		let txt = "";
+		try {
+			const b = readFileSync(join(o.sessionsDir, file));
+			txt = b.subarray(m.off).toString();
+			m.off = b.length;
+		} catch {
+			return;
+		}
+		addSessionLines(m, txt);
+		const term = termOf(n);
+		const d = budget(m);
+		if (d.action === "kill") return kill(term, d.reason);
+		if (d.action === "steer" && term) {
+			o.runCmd("hc", ["send", term, d.reason]);
+			o.log(`${n} steered: ${d.reason}`);
+		}
+		clearTimeout(m.stall);
+		// An agent whose last message is text with no tool call is finished: sitting idle is then normal.
+		if (isBusy(m)) m.stall = setTimeout(() => kill(termOf(n), "stalled 5 min"), STALL_MS);
+	}
+
+	function launch(n, role = "coder") {
+		const r = o.runCmd(o.agentScript, [String(n), role], { env: { ...o.relaunchEnv } });
+		if (r.code) return (o.enqueue([`launch #${n} ${role} failed: ${cut(r.err || r.out, 200)}`]), r);
+		launched.add(String(n));
+		inflight.add(String(n));
+		o.log(`launch: ${role} on #${n}`);
+		return r;
+	}
+
+	function relaunch(n, notes) {
+		const l = launch(n, "coder");
+		if (l.code) return l;
+		o.log(`relaunch: coder on #${n}${notes ? ` (${cut(notes, 80)})` : ""}`);
+		return l;
+	}
+
+	function launchNext() {
+		if (inflight.size >= o.maxInflight) return;
+		const r = o.runCmd(o.nextReadyScript);
+		const n = r.out.trim().split("\n")[0];
+		if (r.code || !n) {
+			o.log(`dispatch: no Ready ticket${r.code ? ` (error ${cut(r.err, 120)})` : ""}`);
+			return;
+		}
+		const l = launch(n, "coder");
+		if (l.code) o.enqueue([`dispatch: launching #${n} failed: ${cut(l.err || l.out, 200)}`]);
+	}
+
+	function mergeApproved(pr) {
+		const n = String(pr.number);
+		const m = o.runCmd("git", ["-C", REPO, "merge", "--ff-only", `origin/${pr.head.ref}`]);
+		if (m.code) return o.enqueue([`merge #${n}: not a fast-forward (${cut(m.err || m.out, 120)}) → rebase needed on #${n}`]);
+		const push = o.runCmd("git", ["-C", REPO, "push", "origin", `origin/${pr.head.ref}:integration`]);
+		if (push.code) return o.enqueue([`merge #${n}: push failed: ${cut(push.err || push.out, 200)}`]);
+		const c = o.runCmd(GH, ["pr", "comment", n, "-b", "Merged by the factory daemon (ff to integration)."]);
+		if (c.code) o.log(`merge #${n}: PR comment failed: ${cut(c.err, 120)}`);
+		const t = o.runCmd(TICKET, ["set", n, "-s", "Integration"]);
+		if (t.code) o.log(`merge #${n}: ticket set failed: ${cut(t.err, 120)}`);
+		launched.delete(n);
+		inflight.delete(n);
+		launchNext();
+	}
+
+	function finish(term, why) {
+		const n = tickets.get(term);
+		if (!n || handled.has(term)) return;
+		handled.add(term);
+		const r = o.runCmd(o.wtScript, ["finish", n]);
+		const msg = `agent #${n} ${why}: ${r.code ? `wt finish failed: ${cut(r.err, 200)}` : r.out}`;
+		o.runCmd("hc", ["kill", term]);
+		o.runCmd("hc", ["rm", term]);
+		for (const [f, u] of [...mon]) {
+			if (sessionTicket(f) !== n) continue;
+			o.log(`ticket ${n} usage req=${u.requests} io=${u.input + u.output} cache_read=${u.cacheRead} cache_write=${u.cacheWrite} cost=${u.cost.toFixed(4)} ctx=${u.input + u.output + u.cacheRead}`);
+			clearTimeout(u.stall);
+			mon.delete(f);
+		}
+		inflight.delete(n);
+		launchNext();
+		if (r.code === 0 && why === "done") o.log(msg);
+		else o.enqueue([msg]);
+	}
+
+	function kill(term, why) {
+		if (!term || handled.has(term)) return;
+		o.enqueue([`agent #${tickets.get(term)} killed: ${why}`]);
+		finish(term, `killed (${why})`);
+	}
+
+	function watchSessions() {
+		mkdirSync(o.sessionsDir, { recursive: true });
+		try {
+			fsWatch(o.sessionsDir, { recursive: true }, (_t, f) => f && String(f).endsWith(".jsonl") && onSession(String(f)));
+			for (const d of readdirSync(o.sessionsDir)) for (const f of readdirSync(join(o.sessionsDir, d))) if (f.endsWith(".jsonl")) onSession(`${d}/${f}`);
+		} catch (e) {
+			o.log(`session watch failed ${e}`);
+		}
+	}
+
+	function watchAgentEvents() {
+		const k = spawn("hc", ["events", "--json", "--label", "project=pirust"], { stdio: ["ignore", "pipe", "pipe"] });
+		let buf = "";
+		k.stdout.on("data", (d) => {
+			buf += d;
+			let i;
+			while ((i = buf.indexOf("\n")) >= 0) {
+				const line = buf.slice(0, i);
+				buf = buf.slice(i + 1);
+				try {
+					const ev = JSON.parse(line)?.params;
+					if (!ev) continue;
+					const term = ev.terminal ?? ev.data?.address;
+					const t = ev.data?.labels?.ticket;
+					if (term && t) tickets.set(term, t);
+					if (ev.type !== "labels" && ev.type !== "foreground") o.log(`hc ${ev.type} ${term} ${JSON.stringify(ev.data).slice(0, 200)}`);
+					const st = ev.data?.status?.state;
+					if (term && tickets.has(term) && !hardCap.has(term)) hardCap.set(term, setTimeout(() => kill(term, "hard cap 30 min"), 30 * 60_000));
+					if (st === "working") busy.add(term);
+					if (ev.type === "finished") finish(term, `exited ${ev.data?.exit_code ?? ""}`);
+					else if (st === "done" || (st === "idle" && busy.has(term))) finish(term, "done");
+					else if (["blocked", "error"].includes(st)) finish(term, st);
+				} catch {}
+			}
+		});
+		k.on("exit", (c) => {
+			o.log(`hc events exit ${c}; restart in 30s`);
+			setTimeout(() => {
+				catchUp(lastSeen);
+				watchAgentEvents();
+				lastSeen = new Date().toISOString();
+				persist();
+			}, 30_000);
+		});
+	}
+
+	// Agents that finished while no process was listening: adopt the running ones, finish the rest.
+	function reconcile() {
+		const r = o.runCmd("hc", ["ls", "--json"]);
+		if (r.code) {
+			o.log(`reconcile: hc ls failed: ${cut(r.err, 200)}`);
+			return [];
+		}
+		let list = [];
+		try {
+			list = JSON.parse(r.out)?.terminals ?? [];
+		} catch {
+			o.log("reconcile: bad hc ls json");
+			return [];
+		}
+		for (const t of list) {
+			const l = t.labels ?? {};
+			if (l.project !== "pirust" || !l.ticket) continue;
+			const n = String(l.ticket);
+			tickets.set(t.address, n);
+			if (t.status?.state === "working") {
+				busy.add(t.address);
+				inflight.add(n);
+				launched.add(n);
+			}
+			if (t.status?.state === "exited") {
+				if (t.status.exit_code === 0) finish(t.address, "exited 0 (reconciled)");
+				else o.enqueue([`agent #${n} exited ${t.status.exit_code} (reconciled)`]);
+			}
+		}
+		return list;
+	}
+
+	return { options: o, tickets, busy, mon, hardCap, handled, launched, inflight, onSession, launch, relaunch, launchNext, mergeApproved, finish, kill, watchSessions, watchAgentEvents, reconcile, termOf };
+}
+
+// ---- agents: one monitor for the whole factory; session files are the heartbeat ----
+const agents = createAgentMonitor({ launched, });
+
+// ---- CEO: one SDK session kept warm; a wake is one request (see ceo-wake.mjs) ----
+let ceo;
+let wakeChain = Promise.resolve();
+function enqueue(lines, immediate = false) {
 	for (const l of lines) queue.add(l);
 	if (queue.size > BATCH_MAX) queue.delete(queue.values().next().value);
 	clearTimeout(flushTimer);
-	flushTimer = setTimeout(flush, DEBOUNCE_MS);
+	if (immediate) flush();
+	else flushTimer = setTimeout(flush, DEBOUNCE_MS);
 	persist();
 }
+
 function flush() {
 	clearTimeout(flushTimer);
 	const lines = [...queue];
 	queue.clear();
 	persist();
 	if (!lines.length) return;
-	const r = run(process.execPath, [WAKE, lines.join("\n")]);
-	if (r.code) {
-		const msg = `CEO wake failed (no answer; handle by hand): ${cut(r.err || r.out, 400)}`;
+	wakeChain = wakeChain.then(() => wakeCeo(lines)).catch((e) => {
+		const msg = `CEO wake failed (no answer; handle by hand): ${cut(e?.stack ?? e, 400)}`;
 		log(msg);
 		console.error(msg);
-		return;
-	}
-	if (r.out) console.log(r.out);
-}
-
-// ---- agents: session files are the heartbeat; a dead agent is found at startup ----
-const ticketOf = (term) => tickets.get(term);
-const termOf = (n) => [...tickets].find(([, v]) => v === n)?.[0];
-
-function onSession(file) {
-	const n = file.match(/pirust-wt-(\d+)--/)?.[1];
-	if (!n) return;
-	const m = mon.get(n) ?? { off: 0, req: 0, tok: 0, cr: 0, cw: 0, cost: 0, calls: [] };
-	mon.set(n, m);
-	let txt = "";
-	try {
-		const b = readFileSync(join(SESS, file));
-		txt = b.subarray(m.off).toString();
-		m.off = b.length;
-	} catch {
-		return;
-	}
-	for (const line of txt.split("\n")) {
-		try {
-			const e = JSON.parse(line);
-			if (e.type !== "message" || e.message?.role !== "assistant") continue;
-			const u = e.message.usage ?? {};
-			m.req += 1;
-			m.tok += (u.input ?? 0) + (u.output ?? 0);
-			m.cr += u.cacheRead ?? 0;
-			m.cw += u.cacheWrite ?? 0;
-			m.cost += u.cost?.total ?? 0;
-			for (const c of e.message.content ?? []) if (c.type === "toolCall") m.calls.push(c.name + JSON.stringify(c.arguments));
-		} catch {}
-	}
-	m.calls = m.calls.slice(-4);
-	const term = termOf(n);
-	clearTimeout(m.stall);
-	if (m.calls.length === 4 && m.calls.every((c) => c === m.calls[0])) {
-		log(`ticket ${n} usage req=${m.req} io=${m.tok} cache_read=${m.cr} cache_write=${m.cw} cost=${m.cost.toFixed(4)} (killed: loop)`);
-		return kill(term, "loop: same tool call 4x");
-	}
-	if (m.tok > 400_000 || m.cr > 3_000_000) {
-		log(`ticket ${n} usage req=${m.req} io=${m.tok} cache_read=${m.cr} cache_write=${m.cw} cost=${m.cost.toFixed(4)} (killed: budget)`);
-		return kill(term, `budget: ${m.tok} io/${m.cr} cache`);
-	}
-	m.stall = setTimeout(() => kill(termOf(n), "stalled 5 min"), 5 * 60_000);
-}
-
-function watchSessions() {
-	mkdirSync(SESS, { recursive: true });
-	try {
-		fsWatch(SESS, { recursive: true }, (_t, f) => f && String(f).endsWith(".jsonl") && onSession(String(f)));
-		for (const d of readdirSync(SESS)) for (const f of readdirSync(join(SESS, d))) if (f.endsWith(".jsonl")) onSession(`${d}/${f}`);
-	} catch (e) {
-		log(`session watch failed ${e}`);
-	}
-}
-
-function relaunchOne(n, notes) {
-	const l = run(AGENT, [n, "coder"]);
-	if (l.code) return enqueue([`relaunch #${n} failed: ${cut(l.err || l.out, 200)}`]);
-	launched.add(n);
-	inflight.add(n);
-	persist();
-	log(`relaunch: coder on #${n}${notes ? ` (${cut(notes, 80)})` : ""}`);
-}
-
-function launchNext() {
-	if (inflight.size >= MAX_INFLIGHT) return;
-	const r = run(join(TOOLS, "next-ready"));
-	const n = r.out.trim();
-	if (r.code || !n) {
-		log(`dispatch: no Ready ticket${r.code ? ` (error ${cut(r.err, 120)})` : ""}`);
-		return;
-	}
-	const l = run(AGENT, [n, "coder"]);
-	if (l.code) return enqueue([`dispatch: launching #${n} failed: ${cut(l.err || l.out, 200)}`]);
-	launched.add(n);
-	inflight.add(n);
-	persist();
-	log(`dispatch: launched #${n}`);
-}
-
-function mergeApproved(pr) {
-	const n = String(pr.number);
-	const m = run("git", ["-C", REPO, "merge", "--ff-only", `origin/${pr.head.ref}`]);
-	if (m.code) return enqueue([`merge #${n}: not a fast-forward (${cut(m.err || m.out, 120)}) → rebase needed on #${n}`]);
-	const push = run("git", ["-C", REPO, "push", "origin", `origin/${pr.head.ref}:integration`]);
-	if (push.code) return enqueue([`merge #${n}: push failed: ${cut(push.err || push.out, 200)}`]);
-	const c = run(GH, ["pr", "comment", n, "-b", "Merged by the factory daemon (ff to integration)."]);
-	if (c.code) log(`merge #${n}: PR comment failed: ${cut(c.err, 120)}`);
-	const t = run(TICKET, ["set", n, "-s", "Integration"]);
-	if (t.code) log(`merge #${n}: ticket set failed: ${cut(t.err, 120)}`);
-	launched.delete(n);
-	inflight.delete(n);
-	launchNext();
-}
-
-function finishAgent(term, why) {
-	const n = ticketOf(term);
-	if (!n || handled.has(term)) return;
-	handled.add(term);
-	const r = run(join(TOOLS, "wt"), ["finish", n]);
-	const msg = `agent #${n} ${why}: ${r.code ? `wt finish failed: ${cut(r.err, 200)}` : r.out}`;
-	run("hc", ["kill", term]);
-	run("hc", ["rm", term]);
-	const u = mon.get(n);
-	clearTimeout(u?.stall);
-	if (u) log(`ticket ${n} usage req=${u.req} io=${u.tok} cache_read=${u.cr} cache_write=${u.cw} cost=${u.cost.toFixed(4)} ctx=${u.tok + u.cr}`);
-	mon.delete(n);
-	inflight.delete(n);
-	launchNext();
-	if (r.code === 0 && why === "done") log(msg);
-	else enqueue([msg]);
-}
-
-function kill(term, why) {
-	if (!term || handled.has(term)) return;
-	const n = ticketOf(term);
-	enqueue([`agent #${n} killed: ${why}`]);
-	finishAgent(term, `killed (${why})`);
-}
-
-function watchAgents() {
-	const k = spawnProcess("hc", ["events", "--json", "--label", "project=pirust"]);
-	let buf = "";
-	k.stdout.on("data", (d) => {
-		buf += d;
-		let i;
-		while ((i = buf.indexOf("\n")) >= 0) {
-			const line = buf.slice(0, i);
-			buf = buf.slice(i + 1);
-			try {
-				const ev = JSON.parse(line)?.params;
-				if (!ev) continue;
-				const term = ev.terminal ?? ev.data?.address;
-				const t = ev.data?.labels?.ticket;
-				if (term && t) tickets.set(term, t);
-				if (ev.type !== "labels" && ev.type !== "foreground") log(`hc ${ev.type} ${term} ${JSON.stringify(ev.data).slice(0, 200)}`);
-				const st = ev.data?.status?.state;
-				if (term && tickets.has(term) && !hardCap.has(term)) hardCap.set(term, setTimeout(() => kill(term, "hard cap 30 min"), 30 * 60_000));
-				if (st === "working") busy.add(term);
-				if (ev.type === "finished") finishAgent(term, `exited ${ev.data?.exit_code ?? ""}`);
-				else if (st === "done" || (st === "idle" && busy.has(term))) finishAgent(term, "done");
-				else if (["blocked", "error"].includes(st)) finishAgent(term, st);
-			} catch {}
-		}
 	});
-	k.on("exit", (c) => {
-		log(`hc events exit ${c}; restart in 30s`);
-		setTimeout(() => {
-			catchUp(lastSeen);
-			watchAgents();
-			lastSeen = new Date().toISOString();
-			persist();
-		}, 30_000);
-	});
+}
+
+async function wakeCeo(lines) {
+	ceo ??= await createCeoSession();
+	const r = await ceo.wake(lines.join("\n"));
+	if (r.text) log(`CEO: ${cut(r.text, 400)}`);
+	return r;
 }
 
 // ---- GitHub: push first, API catch-up for the gaps ----
@@ -327,64 +412,33 @@ function catchUp(since) {
 	for (const i of getJson(`repos/${REPO_NAME}/issues?state=open&since=${s}&per_page=100`)) {
 		if (!fresh(`i:${i.id}`)) continue;
 		const n = String(i.number);
-		const rl = String(i.body ?? "").match(/^## Relaunch\s*\n[\s\S]*?\bticket:\s*(\d+)/);
-		if (rl) relaunchOne(rl[1], cut(String(i.body).match(/notes:\s*(.+)/)?.[1], 80));
+		const rl = relaunchTarget(i.body);
+		if (rl) agents.relaunch(rl.ticket, rl.notes);
 		const assigned = (i.assignees ?? []).some((a) => a.login === BOT_USER);
-		if (assigned && !launched.has(n) && !inflight.has(n)) {
+		if (assigned && !launched.has(n) && !agents.inflight.has(n)) {
 			launched.add(n);
-			inflight.add(n);
-			const r = run(AGENT, [n, "coder"]);
+			agents.inflight.add(n);
+			const r = agents.launch(n, "coder");
 			lines.push(r.code ? `issue #${n} assigned ${BOT_USER}; launch failed: ${cut(r.err || r.out, 120)}` : `issue #${n} assigned ${BOT_USER}; launched coder`);
 			persist();
 		}
 	}
-	for (const pr of getJson(`repos/${REPO_NAME}/pulls?state=open&sort=updated&direction=desc&per_page=50`) ) {
+	for (const pr of getJson(`repos/${REPO_NAME}/pulls?state=open&sort=updated&direction=desc&per_page=50`)) {
 		if (String(pr.updated_at) < s || !fresh(`pr:${pr.id}`)) continue;
-		const t = String(pr.body ?? "").match(/Closes #(\d+)/)?.[1];
+		const t = closesTicket(pr.body);
 		if (t && !reviewed.has(t)) {
 			reviewed.add(t);
-			const r = run(AGENT, [t, "reviewer"]);
+			const r = agents.launch(t, "reviewer");
 			lines.push(r.code ? `PR #${pr.number}: launch reviewer for #${t} failed: ${cut(r.err || r.out, 120)}` : `PR #${pr.number} ready for review on #${t}`);
 			persist();
 		}
 	}
 	if (lines.length) {
-		lines.forEach((l) => queue.add(l));
+		for (const l of lines) queue.add(l);
 		clearTimeout(flushTimer);
 		flush();
 	}
 	return lines;
-}
-
-// Agents that finished while no process was listening: adopt the running ones, finish the rest.
-function reconcile() {
-	const r = run("hc", ["ls", "--json"]);
-	if (r.code) {
-		log(`reconcile: hc ls failed: ${cut(r.err, 200)}`);
-		return;
-	}
-	let list = [];
-	try {
-		list = JSON.parse(r.out)?.terminals ?? [];
-	} catch {
-		log("reconcile: bad hc ls json");
-		return;
-	}
-	for (const t of list) {
-		const l = t.labels ?? {};
-		if (l.project !== "pirust" || !l.ticket) continue;
-		const n = String(l.ticket);
-		tickets.set(t.address, n);
-		if (t.status?.state === "working") {
-			busy.add(t.address);
-			inflight.add(n);
-			launched.add(n);
-		}
-		if (t.status?.state === "exited") {
-			if (t.status.exit_code === 0) finishAgent(t.address, "exited 0 (reconciled)");
-			else enqueue([`agent #${n} exited ${t.status.exit_code} (reconciled)`]);
-		}
-	}
 }
 
 function startWebhooks() {
@@ -403,22 +457,24 @@ function startWebhooks() {
 				const p = JSON.parse(body);
 				if (p.sender?.login === BOT) return;
 				const type = String(req.headers["x-github-event"] ?? "");
-				const line = summarize(type, p);
+				let line = summarize(type, p);
 				if (!line) return;
-				const rl = String(p.issue?.body ?? "").match(/^## Relaunch\s*\n[\s\S]*?\bticket:\s*(\d+)/);
-				if (type === "issues" && p.action === "opened" && rl) relaunchOne(rl[1], cut(String(p.issue.body).match(/notes:\s*(.+)/)?.[1], 80));
-				const t = String(p.pull_request?.body ?? "").match(/Closes #(\d+)/)?.[1];
+				line = resolveBoardRef(line, ticketOfNode);
+				const rl = relaunchTarget(p.issue?.body);
+				if (type === "issues" && p.action === "opened" && rl) agents.relaunch(rl.ticket, rl.notes);
+				const t = closesTicket(p.pull_request?.body);
 				if (type === "pull_request" && p.action === "opened" && t && !reviewed.has(t)) {
 					reviewed.add(t);
-					const r = run(AGENT, [t, "reviewer"]);
+					const r = agents.launch(t, "reviewer");
 					log(r.code ? `PR #${p.pull_request.number}: launch reviewer for #${t} failed: ${cut(r.err || r.out, 120)}` : `PR #${p.pull_request.number}: launched reviewer for #${t}`);
 					persist();
 				}
-				if (type === "pull_request_review" && p.review?.state === "approved" && p.pull_request?.base?.ref === "integration") mergeApproved(p.pull_request);
+				if (type === "pull_request_review" && p.review?.state === "approved" && p.pull_request?.base?.ref === "integration") agents.mergeApproved(p.pull_request);
 				const bad = type === "check_suite" || type === "workflow_run";
 				if (!bad && !escalates(type, p)) return log(line);
 				if (queue.has(line)) return;
-				enqueue([line]);
+				// Patrick is answered now; a failed agent or a CI red goes out in the next batch.
+				enqueue([line], isPatrick(p.sender?.login));
 			} catch (e) {
 				log(`webhook handle failed: ${cut(e?.stack ?? e, 400)}`);
 			}
@@ -454,9 +510,11 @@ function startWebhooks() {
 }
 
 // ---- start ----
-reconcile();
-catchUp(lastSeen);
-watchAgents();
-watchSessions();
-startWebhooks();
-launchNext();
+if (IS_MAIN) {
+	agents.reconcile();
+	catchUp(lastSeen);
+	agents.watchAgentEvents();
+	agents.watchSessions();
+	startWebhooks();
+	agents.launchNext();
+}
