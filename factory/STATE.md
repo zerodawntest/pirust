@@ -1,11 +1,19 @@
-# Orchestrator state (resume here; skill factory-recover)
-- 00:25 CEO (Patrick): work lives in tickets, scripts route events, chat stays short. New P0 first: forced handoff (tool_choice-locked handoff tool + script ladder), event-route (agent events → ticket actions). Then 99 97 ... as below. WIP max 4 agents.
-- 00:16 CEO: all on pi (Patrick). Docs: factory/README.md, runtime.md, design.md. Skills in .agents/skills. Baseline ~/.pi/pirust-usage.log. t1nm restart needed after 93 + stop gate (#97) land (Patrick-visible).
-- Stopgap dispatcher: pirust-stopgap (no parent, outlive). 30s loop: finish done agents (wt finish, kill, rm); launch from ~/.pig/pirust-queue (edit to reorder), then tools/next-ready; max 5. t1nm gh-events also dispatches. Kill when #91 watchdog lands.
-- Queue (CEO order): 99 97 | #52 split children 100 102 103 104 105 | 65 96 98, then 84. #52 Backlog (parent); close PR 62 70 82 when children merge.
-- Parked (claim "parked:#99"): #40 (PR 51, tools/wt), #60 (tools/sandbox). After #99 merges: clear claim, relaunch.
-- Merged + Done 2026-11-17: 80 66 77 64 59 85 88 89 90 93(#86); 67(#46) in flight.
-- Rejected → Ready: 71/#61 test makes real issue; 87/#68 RULES_PATH; 95/#76 self-approve 422 + "In review" unquoted; 101/#92 lesson regexes block mentions (.pig, herdr, git push).
-- Follow-ups to ticket: test/keepalive.test.ts hangs with hc on PATH; tools/sandbox copies agent-tools.ts into wt (git-excluded now); ~/.config/herdr-core/templates/coder.md must mirror factory/templates after #96.
-- #96 absorbs #73 load fix: templates use -ne, so agent-tools/handoff never loads (evidence on #96).
-- Waiting on Patrick: #4 #5 #6 #28 #32
+# STATE (driver, 2026-11-17 06:50)
+- Mode: verify first. Land = clone ~/.pig/cache/merge-N, cred helper ("" then add tools/gh-app-token; never --replace-all), rebase -S, verify, push t/N -f (retry: "remote rejected (failed)" is transient), push t/N:integration, rebase main --autostash. Conflict -> `tools/wt refresh N`. One digest line per merge/reject.
+- Guard: commands must START with `hc run --bg`; bodies via heredoc in `bash -c "$(cat <<'SCRIPT' ...)"`.
+- #139 landed: agent prompt has NO comments, and `ticket set -s Ready` lints (Files: first line, <=3 paths, `- Verify:` under `## Done when`, <=45 lines, no factory/*.md, no "skill"). Rework notes go INTO the body, in template form.
+- Board: no Blocked status (= Backlog + labels blocked, needs:split); Size S/M/L.
+- LESSON: verify tools/ticket changes with one REAL `ticket set`; stubs passed twice while real calls failed.
+- Landed today: 99 57 55 109 142 135 107 113 110 106 58 79 78 154 91 68 159 139 75. Reverted: 81 (04cbb2a).
+- pirust-watchdog systemd timer installed by hand (transient: re-run after reboot; install bug #164). Runs every 2 min; first run: no action.
+- #97, #96 Backlog needs:split. #69 Backlog (agents run --no-skills). #153 closed not planned (lifecycle: fresh agent per step; my follow-up was wrong). #155 landed 5136986.
+- An old-format body fails the Ready lint -> the agent run ends empty. Rewrite to template before requeue.
+- Landed after: 155 92 81 164 156. Watchdog timer now installed by `tools/watchdog install` from the main checkout.
+- Board cleanup (CEO) done: #118-125 Done; In progress 65 9 17 32 37 43 74 -> Backlog; PRs 129 95 82 71 70 62 51 closed, tickets -> Backlog.
+- Queue: 171 (loop-model). Watcher hc pirust-loop-p0 (~/.pig/loop-p0.out): waits for (#171) in integration + open "phase 0" issue (CEO body factory/tk-p0.md), then runs loop p0.
+- Loop lifecycle (#130 goal) exited 3 (researcher overflowed ctx); not rerun.
+- #172 (lint only Task/Bug) PR 173 conflicted with #81 -> refreshed (markers tools/ticket), Ready, queued before Features can be created.
+- Waiting on Patrick: #4 #5 #6 #28 #32.
+- CEO 07:00: codex models allowed (factory/process-review.md). Port plan factory/port-plan.md. Lint blocks Feature creation -> P0 bug queued; after it lands: create 7 phase Features under #36 (P0 body factory/tk-p0.md), then milestone loop on phase 0 (needs #171 loop-model). Loop run 1 failed: qwen researcher overflowed 160k ctx.
+- CEO 07:10: factory/feedback.md has priority over port scale-out. Build order 1-6 there; step 1 ticket queued (digest "feedback step1").
+- CEO 07:00: step1 = #174 (Ready). step2 tools/kpi ticket (digest "feedback step2"). hc pirust-mk-phases waits for #172 in integration, then creates the 7 phase Features (digest "port phase Features"); loop-p0 watcher picks phase 0 up. Next CEO: step 3 trigger ticket after #174 + kpi land.
