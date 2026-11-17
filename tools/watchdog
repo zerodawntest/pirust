@@ -136,8 +136,14 @@ newest() {
 if [ "$MODE" = install ]; then
   # Every 2 min (minutes 0,2,4,... at second 0). The timer is transient, so `install` re-creates it
   # after a reboot; the units systemd-run writes need no daemon-reload and no NixOS rebuild.
-  run systemd-run --user --quiet --timer --on-calendar='*:00/2:00' --unit=pirust-watchdog \
+  # `--timer` is NOT a systemd-run flag: it is read as an abbreviation of `--timer-property`, so
+  # systemd-run refuses with "`--timer-property=` set without any timer trigger expression". The
+  # timer expression is `--on-calendar`. The unit runs without the user's env, so pass PATH (and
+  # HOME) explicitly: without PATH the `hc` the checks call is not found.
+  mkdir -p "$STATE" || { printf 'watchdog: cannot write %s\n' "$STATE" >&2; exit 1; }
+  run systemd-run --user --on-calendar='*:0/2' --unit=pirust-watchdog \
     --description='pirust watchdog: restart and wake the lead, the driver, the liaison (ticket #91)' \
+    --setenv=PATH="$PATH" --setenv=HOME="$HOME" \
     --collect bash -c "'$D/watchdog' >'$STATE/last-run.log' 2>&1"
   printf 'verify: systemctl --user list-timers | grep pirust-watchdog\n'
   exit 0
