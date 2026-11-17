@@ -2,15 +2,19 @@
 # ticket new  -t TITLE -k Epic|Feature|Task|Bug [-p PARENT#] [-l lab1,lab2] [-s Status] [-P P1] [-S M] [-b BODY|-]
 # ticket set  NUM [-s Status] [-P P1] [-S M] [-c CLAIM]
 # Prints issue number. Repo is fixed: zerodawntest/pirust.
+# shellcheck disable=SC2016  # GraphQL $vars are literal in the query string; bound via -f
 set -euo pipefail
-D=$(dirname "$(readlink -f "$0")"); B=$D/board.json; R=zerodawntest/pirust
+D=$(dirname "$(readlink -f "$0")"); B=$D/board.json; R=zerodawntest/pirust; PROJ=$(jq -r .project "$B")
 fid(){ jq -r --arg f "$1" '.fields[$f].id' "$B"; }
 oid(){ jq -r --arg f "$1" --arg o "$2" '.fields[$f].options[$o] // error("bad \($f): \($o)")' "$B"; }
 valid(){ jq -e --arg f "$1" --arg o "$2" '.fields[$f].options[$o] != null' "$B" >/dev/null; }
 usage(){ sed -n '2,4p' "$0"; exit 1; }
 die(){ printf 'ticket: %s\n' "$*" >&2; exit 1; }
-setsel(){ gh api graphql -f query="mutation{ updateProjectV2ItemFieldValue(input:{projectId:\"$(jq -r .project "$B")\", itemId:\"$1\", fieldId:\"$(fid "$2")\", value:{singleSelectOptionId:\"$(oid "$2" "$3")\"}}){ clientMutationId } }" >/dev/null; }
-settxt(){ gh api graphql -f query="mutation{ updateProjectV2ItemFieldValue(input:{projectId:\"$(jq -r .project "$B")\", itemId:\"$1\", fieldId:\"$(fid "$2")\", value:{text:\"$3\"}}){ clientMutationId } }" >/dev/null; }
+# Values go via -f variables, never interpolated into the query string: a value
+# containing `"` (e.g. an issue body with JSON) would break the query otherwise (#81).
+# shellcheck disable=SC2016  # GraphQL $vars are literal in the query string; bound via -f
+setsel(){ gh api graphql -f 'query=mutation($iid:ID!,$fid:ID!,$sid:String!){ updateProjectV2ItemFieldValue(input:{projectId:"'"$PROJ"'", itemId:$iid, fieldId:$fid, value:{singleSelectOptionId:$sid}}){ clientMutationId }}' -f iid="$1" -f fid="$(fid "$2")" -f sid="$(oid "$2" "$3")" >/dev/null; }
+settxt(){ gh api graphql -f 'query=mutation($iid:ID!,$fid:ID!,$txt:String!){ updateProjectV2ItemFieldValue(input:{projectId:"'"$PROJ"'", itemId:$iid, fieldId:$fid, value:{text:$txt}}){ clientMutationId }}' -f iid="$1" -f fid="$(fid "$2")" -f txt="$3" >/dev/null; }
 # item NUM [NID] -> project item id (adds if missing). NID comes from the create
 # response: refetching right after creation can return an error body, which then breaks
 # the GraphQL query string (ticket #44). Falls back to a fetch for `set`.
@@ -18,8 +22,15 @@ item(){
   local n=$1 nid=${2:-}
   [ -n "$nid" ] || nid=$(gh api "repos/$R/issues/$n" --jq '.node_id // empty')
   [[ $nid =~ ^I_[A-Za-z0-9_-]+$ ]] || die "issue $n: invalid node_id '$nid'"
-  local q; q="mutation{ addProjectV2ItemById(input:{projectId:\"$(jq -r .project "$B")\", contentId:\"$nid\"}){ item{ id } } }"
-  gh api graphql -f query="$q" --jq .data.addProjectV2ItemById.item.id 2>/dev/null || { sleep 2; gh api graphql -f query="$q" --jq .data.addProjectV2ItemById.item.id; }
+  local q='mutation($pid:ID!,$cid:ID!){ addProjectV2ItemById(input:{projectId:$pid, contentId:$cid}){ item{ id } }}'
+  # Capture each attempt's stdout separately; on retry the first attempt's error output
+  # must NOT leak into the returned item id (that made it multi-line and broke setsel).
+  local r
+  if ! r=$(gh api graphql -f query="$q" -f pid="$PROJ" -f cid="$nid" --jq .data.addProjectV2ItemById.item.id 2>/dev/null); then
+    sleep 2
+    r=$(gh api graphql -f query="$q" -f pid="$PROJ" -f cid="$nid" --jq .data.addProjectV2ItemById.item.id)
+  fi
+  printf '%s' "$r"
 }
 # Lint a ticket body (ticket #139). Prints one line per problem; returns 1 if any.
 lint(){
@@ -64,7 +75,8 @@ new)
   { [ -z "$S" ] || valid Status "$S"; } || usage
   { [ -z "$PR" ] || valid Priority "$PR"; } || usage
   { [ -z "$SZ" ] || valid Size "$SZ"; } || usage
-  lint "$BODY" || exit 1
+  # Lint is enforced on `set ... -s Ready` (an agent must not be launched on a bad
+  # ticket); `new` must always create + set fields and exit 0, so it does not gate here.
   J=$(gh api "repos/$R/issues" "${args[@]}"); N=$(jq -r .number <<<"$J"); ID=$(jq -r .id <<<"$J")
   [[ ,$L, == *,needs:patrick,* ]] && gh api "repos/$R/issues/$N/assignees" -f "assignees[]=Patrick-Kappen" -f "assignees[]=Patrick-Kappen-SLTN" >/dev/null
   [ -n "$P" ] && gh api "repos/$R/issues/$P/sub_issues" -F sub_issue_id="$ID" >/dev/null
