@@ -3,6 +3,8 @@
 !.pi/
 
 /target
+# extcheck writes a pass stamp keyed by extension content hashes (see tools/extcheck)
+.pi/.extcheck-pass
 .devenv*
 devenv.local.nix
 .direnv
