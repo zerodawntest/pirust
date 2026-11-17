@@ -6,6 +6,12 @@
 # failure comment the command+output on the ticket and set Ready. --dry-run runs the checks, skips the writes (step 4).
 set -euo pipefail
 D=$(dirname "$(readlink -f "$0")"); R=$(dirname "$D"); GH="$D/gh-bot"; TICK="$D/ticket"; B=integration
+# git credential helper for the clone: on `get`, emit username/password from gh-app-token (a GitHub
+# app installation token). $GHAPP is baked in as an absolute path; the $() is deferred to git's shell.
+GHAPP="$D/gh-app-token"
+# SC2016: the single quotes are intentional — $1/$( ) must stay literal in the stored command string.
+# shellcheck disable=SC2016
+GIT_HELPER='!f() { test "$1" = get && printf "username=x-access-token\npassword=%s\n" "$('"$GHAPP"' 2>&1)"; }; f'
 dr=0; args=()
 for x in "$@"; do case $x in --dry-run) dr=1 ;; *) args+=("$x") ;; esac; done
 PR=${args[0]:-}; T=${args[1]:-}
@@ -14,11 +20,13 @@ BR="t/$T"; W="$HOME/.pig/cache/merge-$PR"
 report=""; fail=0; out=""; rc=0
 
 # run [-d DIR] DESC CMD... runs CMD (in DIR, else cwd); on non-zero prints `DESC: FAIL`, records cmd+output, sets fail=1.
+# The `out=$(...) && rc=0 || rc=$?` shape is an AND-OR list, so `set -e` is suppressed for the command
+# substitution: a failing step records a FAIL and keeps going (a bare `out=$(...)` would exit the shell).
 run(){
-  local d=""
+  local d="" rc=0
   [ "$1" = -d ] && { d=$2; shift 2; }
   local desc=$1; shift
-  if [ -n "$d" ]; then out=$(cd "$d" && "$@" 2>&1); rc=$?; else out=$("$@" 2>&1); rc=$?; fi
+  if [ -n "$d" ]; then out=$(cd "$d" && "$@" 2>&1) && rc=0 || rc=$?; else out=$("$@" 2>&1) && rc=0 || rc=$?; fi
   local cmd; cmd=$(printf '%q ' "$@")
   if [ $rc -ne 0 ]; then printf '%s: FAIL\n%s\n' "$desc" "$out"; report+=$'\n$ '"$cmd"$'\n'"$out"; fail=1; return 0; fi
   printf '%s: ok\n' "$desc"
@@ -38,9 +46,16 @@ if [ $fail = 0 ]; then
   files1=$(sed -n '1p' <<<"$tbody")
   case $files1 in
     'Files: '*)
-      listed=" ${files1#Files: } "
+      # `Files:` is a comma-separated list; each entry may carry a trailing " (new)" marker.
+      declare -A allowed=()
+      IFS=',' read -ra flist <<<"${files1#Files: }"
+      for a in "${flist[@]}"; do
+        a=${a%% (new)*}                                   # drop a trailing " (new)" marker
+        a=${a#"${a%%[![:space:]]*}"}; a=${a%"${a##*[![:space:]]}"}  # trim leading/trailing spaces
+        [ -n "$a" ] && allowed["$a"]=1
+      done
       for f in $(jq -r '.files[].path' <<<"$pjson"); do
-        case $listed in *" $f "*) : ;; *) printf '1 scope: FAIL\n%s out of ticket scope\n' "$f"; note "$f out of ticket scope"; fail=1 ;; esac
+        [ -n "${allowed[$f]:-}" ] || { printf '1 scope: FAIL\n%s out of ticket scope\n' "$f"; note "$f out of ticket scope"; fail=1; }
       done ;;
     *) printf '1 scope: FAIL\nticket first line is not Files:\n'; note "ticket first line is not Files:"; fail=1 ;;
   esac
@@ -51,6 +66,12 @@ fi
 if [ $fail = 0 ]; then
   rm -rf "$W"
   run "2 copy $W" git clone -q "$R" "$W"
+  # The clone's origin is the local checkout: origin/t/* and origin/integration are local refs, push
+  # would land in the local repo (which has integration checked out), and it carries no bot credential
+  # helper. Repoint origin at GitHub and install gh-app-token so fetch/push use the app installation token.
+  run "2 origin->github" git -C "$W" remote set-url origin https://github.com/zerodawntest/pirust.git
+  run "2 credential helper" git -C "$W" config credential.https://github.com.helper "$GIT_HELPER"
+  run "2 fetch $BR" git -C "$W" fetch -q origin "$BR"
   run "2 checkout $BR" git -C "$W" checkout -q -B "$BR" "origin/$BR"
   run "2 fetch origin/$B" git -C "$W" fetch -q origin "$B"
   run "2 rebase -S onto origin/$B" git -C "$W" rebase -q -S "origin/$B"
@@ -83,7 +104,15 @@ fi
 
 # 4 gh checks, push t/N (force) and integration (ff only), ticket Done, close the issue.
 if [ $fail = 0 ]; then
-  run "4 gh pr checks" "$GH" pr checks "$PR"
+  # `gh pr checks` exits non-zero when a PR has no checks; that is not a merge failure.
+  ghout=$("$GH" pr checks "$PR" 2>&1) && ghrc=0 || ghrc=$?
+  if [ "$ghrc" -ne 0 ] && grep -qi 'no checks reported' <<<"$ghout"; then
+    printf '4 gh pr checks: ok (no checks)\n'
+  elif [ "$ghrc" -ne 0 ]; then
+    printf '4 gh pr checks: FAIL\n%s\n' "$ghout"; report+=$'\n$ gh pr checks '"$PR"$'\n'"$ghout"; fail=1
+  else
+    printf '4 gh pr checks: ok\n'
+  fi
   if [ $dr = 1 ]; then
     printf '4 push + tickets: ok (dry-run, writes skipped)\n'
   else
