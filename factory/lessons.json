@@ -1,0 +1,29 @@
+[
+  {
+    "fact": "Everything runs on pi, not pig: the CEO chat (t1nm), the driver, the leads, and the sandboxed agents all run on pi. Do not launch a pig binary; do not read pig docs as if they were pi docs.",
+    "block": "(^|[;&|]\\s*)pig\\s",
+    "msg": "Everything runs on pi, not pig. Do not launch pig; agents run on pi via tools/sandbox. See factory/runtime.md."
+  },
+  {
+    "fact": "Never ask Patrick to reload. After editing .pi/extensions, call reload_runtime yourself; the driver never reloads.",
+    "block": "ask[\\s\\S]{0,40}reload",
+    "msg": "Do not ask Patrick to reload. Call reload_runtime yourself after editing .pi/extensions; the driver never reloads."
+  },
+  {
+    "fact": "Sub-agents are background processes launched via tools/agent (hc run --bg), not interactive panes you open.",
+    "block": "\\bopen[ -]pane\\b|new[ -]pane",
+    "msg": "Sub-agents are background processes via tools/agent, not panes. Launch with: tools/agent <n> [role]."
+  },
+  {
+    "fact": "No claim without evidence: read the tool's own skill/help, test the change, and cite the check (command + result) before reporting done.",
+    "msg": "No claim without evidence: read the tool's skill/help, test the change, and cite the check. Do not push unverified work."
+  },
+  {
+    "fact": "Leads must not edit a file listed in Files: of an In-progress ticket (the CEO broke #91 by editing factory/runtime.md); edit/write on such a path is blocked with that ticket's number.",
+    "msg": "Leads do not edit a file owned by an In-progress ticket. Edit it in the ticket's own worktree, not here."
+  },
+  {
+    "fact": "Block patterns match the executed command only, not text inside quotes (e.g. echo \"git push\" is not a git push).",
+    "msg": "Quoted text is not an executed command."
+  }
+]
