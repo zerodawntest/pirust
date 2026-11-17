@@ -41,6 +41,37 @@ export default function (pi: ExtensionAPI) {
 	const isDriver = process.env.PIRUST_ROLE === "driver";
 	let compacted = false; // the turn ended on a compaction, so nobody continues the task
 	let watching = false;
+	let isLead = false; // true for a lead (t1nm chat, driver), set in session_start before any settle
+	let stopgate = 0; // stop-gate continues issued in the current user turn (max MAX_STOPGATE)
+
+	// A real user prompt is a new user turn: reset the stop-gate budget. Runs started by a
+	// custom_message (the gate's own continuation, item 2) carry messageType "custom" and do not reset.
+	pi.on("before_agent_start", (e: any) => {
+		if (e.messageType === "user") stopgate = 0;
+	});
+
+	// Stop gate: a lead cannot end a turn while `next-work` shows open items. Non-empty output is
+	// fed back as one hidden user message and forces one more provider request (continue: true).
+	pi.on("agent_before_settle", (event: any) => {
+		if (!isLead) return;
+		let out = "";
+		try {
+			out = execFileSync(NEXT_WORK, [], { encoding: "utf8" }).trim();
+		} catch {
+			/* next-work is best-effort: a missing tool must not block the settle */
+		}
+		if (!out || stopgate >= MAX_STOPGATE) return;
+		stopgate++;
+		try {
+			appendFileSync(USAGE, `${new Date().toISOString()} stopgate=${stopgate}\n`);
+		} catch {
+			/* usage log is best effort: a read-only HOME must not break the session */
+		}
+		return {
+			entries: [...(event.entries ?? []), { type: "custom_message", customType: "stop-gate", content: out, display: false }],
+			continue: true,
+		};
+	});
 
 	pi.on("session_compact", async (e: any) => {
 		// `willRetry` true = overflow recovery, pi re-runs the turn itself, so it needs no wake.
@@ -63,6 +94,7 @@ export default function (pi: ExtensionAPI) {
 		}
 		if (isDriver) return;
 		if (cwd !== REPO || watching) return; // only the Patrick chat watches the leads
+		isLead = true;
 		watching = true;
 		const k = spawn("hc", ["events", "--json"], { stdio: ["ignore", "pipe", "pipe"] });
 		let buf = "";
