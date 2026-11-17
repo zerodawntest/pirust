@@ -70,6 +70,13 @@ refresh)
     echo "refreshed"
   fi ;;
 finish)
+  # Measure every agent run before finishing: sum token usage for each session file
+  # in this worktree's agent sessions dir. Ignore errors so a usage problem never
+  # blocks finish. `tools/usage` replaces an earlier row for the same session file,
+  # so running it again on the same file is safe. See ticket #174.
+  for s in "$HOME/.pig/sandbox/agent/sessions/--home-zerodawn-private-pirust-wt-$N--"/*.jsonl; do
+    [ -f "$s" ] && "$D/usage" "$s" || true
+  done
   [ -d "$W" ] || { echo "no-worktree"; exit 0; }
   cd "$W"
   if [ ! -f HANDOFF.md ] && [ -z "$(w status --porcelain)" ] && [ -n "$("$D/gh-bot" pr list --head "$BR" --state all --json number -q '.[0].number')" ]; then echo "already-finished"; exit 0; fi
