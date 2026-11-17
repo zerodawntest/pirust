@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# List the named exports per source file, for the inventory files
+# (factory/inventory/<pkg>.md, one row per source file).
+#
+# Usage: tools/inventory-exports PKG [--check factory/inventory/PKG.md]
+#
+# Reads every non-test .ts file under the package source root and prints
+# `src/<relative path> | \`name\`, \`name\``, one line per file. With --check,
+# compares against the inventory's exports column and reports names that the
+# inventory is missing.
+
+set -u
+
+usage() {
+	printf 'usage: %s PKG [--check INVENTORY.md]\n' "$0" >&2
+	exit 2
+}
+
+if [ $# -eq 1 ] && { [ "$1" = "-h" ] || [ "$1" = "--help" ]; }; then
+	printf 'usage: %s PKG [--check INVENTORY.md]\n' "$0"
+	exit 0
+fi
+
+[ $# -ge 1 ] || usage
+pkg=$1
+shift
+
+inventory=''
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--check)
+		[ $# -ge 2 ] || usage
+		inventory=$2
+		shift 2
+		;;
+	*)
+		printf 'unknown argument: %s\n' "$1" >&2
+		usage
+		;;
+	esac
+done
+
+# The source lives at /src/pi/packages/PKG/src inside the sandbox, and in the
+# local checkout outside it; use whichever exists.
+srcroot=''
+for dir in "/src/pi/packages/$pkg/src" "$HOME/private/pirust-src/pi/packages/$pkg/src"; do
+	if [ -d "$dir" ]; then
+		srcroot=$dir
+		break
+	fi
+done
+if [ -z "$srcroot" ]; then
+	printf 'no source directory found for package %s\n' "$pkg" >&2
+	exit 1
+fi
+
+# The tick variable holds a literal backtick, for wrapping names in `code`.
+# shellcheck disable=SC2016
+tick='`'
+
+files=()
+while IFS= read -r file; do
+	files+=("$file")
+done < <(find "$srcroot" -type f -name '*.ts' ! -name '*.test.ts' | LC_ALL=C sort)
+
+# Inventory rows for this run: path -> list of exported names it already lists.
+declare -A inv_names=()
+if [ -n "$inventory" ]; then
+	if [ ! -f "$inventory" ]; then
+		printf 'inventory file not found: %s\n' "$inventory" >&2
+		exit 1
+	fi
+	while IFS='|' read -r path names _; do
+		path=${path%% }
+		# Backticks and commas separate the names in the exports column.
+		list=$(printf '%s\n' "$names" | sed -e "s/${tick}//g" -e 's/[[:space:]]//g' -e 's/,/\n/g' -e '/^$/d')
+		inv_names["$path"]=$list
+	done < <(grep -E '^src/[^|]*\|' "$inventory")
+fi
+
+missing=0
+for file in "${files[@]}"; do
+	rel=src/${file#"$srcroot"/}
+
+	# Named exports: `export [async] function|const|class|interface|type|enum NAME`.
+	name_list=$(
+		grep -Eo '^export (async )?(function|const|class|interface|type|enum) [A-Za-z_$][A-Za-z0-9_$]*' "$file" |
+			awk '{ print $NF }' | LC_ALL=C sort -u
+	)
+
+	if [ -z "$inventory" ]; then
+		names=''
+		for name in $name_list; do
+			if [ -z "$names" ]; then
+				names="${tick}${name}${tick}"
+			else
+				names="$names, ${tick}${name}${tick}"
+			fi
+		done
+		printf '%s | %s\n' "$rel" "$names"
+		continue
+	fi
+
+	for name in $name_list; do
+		if ! printf '%s\n' "${inv_names[$rel]:-}" | grep -Fxq -- "$name"; then
+			printf 'MISSING %s %s\n' "$rel" "$name"
+			missing=$((missing + 1))
+		fi
+	done
+done
+
+if [ -n "$inventory" ]; then
+	printf 'missing=%s\n' "$missing"
+	[ "$missing" -eq 0 ] || exit 1
+fi
