@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# next-work: one line per open item a lead (CEO t1nm, driver) must not end a turn on.
+# Empty output = nothing left, so the lead may stop. Each check is independent and best-effort:
+# a missing tool (gh without keys, no sandbox) yields no line for it, never a crash, so a lead
+# never stalls. The `agent_before_settle` stop gate (keepalive.ts) feeds these lines back.
+set -uo pipefail
+D=$(dirname "$(readlink -f "$0")")
+G="$D/gh-bot"
+R=zerodawntest/pirust
+S="$HOME/.pig/sandbox/agent"
+MAX=3
+out=()
+
+# 1. Ready, unclaimed tickets, by priority. `b` is the Project V2 board (one query).
+q='query{organization(login:"zerodawntest"){projectV2(number:2){items(first:100){nodes{content{...on Issue{number state}} s:fieldValueByName(name:"Status"){...on ProjectV2ItemFieldSingleSelectValue{name}} p:fieldValueByName(name:"Priority"){...on ProjectV2ItemFieldSingleSelectValue{name}} c:fieldValueByName(name:"Claimed by"){...on ProjectV2ItemFieldTextValue{text}}}}}}}'
+b=$("$G" api graphql -f "query=$q" --jq '.data' 2>/dev/null || true)
+rdy=$(jq -c '[.organization.projectV2.items.nodes[]|select(.content.state=="OPEN" and .s.name=="Ready" and ((.c.text//"")==""))|{n:.content.number,p:(.p.name//"P9")}]' <<<"$b" 2>/dev/null || echo '[]')
+ip=$(jq -c '[.organization.projectV2.items.nodes[]|select(.content.state=="OPEN" and .s.name=="In progress")|{n:.content.number,p:(.p.name//"P9")}]' <<<"$b" 2>/dev/null || echo '[]')
+rn=$(jq 'length' <<<"$rdy" 2>/dev/null || echo 0)
+ipn=$(jq 'length' <<<"$ip" 2>/dev/null || echo 0)
+by=$(jq -r 'group_by(.p)|map("\(.[0].p) x\(length)")|join(", ")' <<<"$rdy" 2>/dev/null || true)
+[ "${rn:-0}" -gt 0 ] && out+=("Ready: $rn unclaimed ticket(s): $by")
+
+# 2. Open PRs with no review verdict (Approve / Request changes). PR == the t/<n> branch of an
+# in-flight ticket, so check each In progress ticket, in parallel, in one bwrap (keys are absent,
+# so gh fails fast -> nothing counted; the `timeout` bounds it if keys ever return).
+heads=$(jq -r '.[].n' <<<"$ip" 2>/dev/null || true)
+if [ -n "$heads" ]; then
+  W=$(find "$HOME"/private/pirust-wt -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1); W=${W:-/tmp}
+  # The inner `bash -lc` script keeps $HOME/$n in single quotes on purpose so they expand in the
+  # inner shell, not here; $G/$heads/$R are spliced in via '"$var"'. SC2016 is a false positive.
+  # shellcheck disable=SC2016
+  nv=$(timeout 2 "$D/sandbox" "$W" bash -lc '
+    G="'"$G"'"
+    for n in '"$heads"'; do
+      { [ -f "$HOME/private/pirust-wt/$n/HANDOFF.md" ] || [ -n "$(git -C "$HOME/private/pirust-wt/$n" status --porcelain 2>/dev/null)" ] || [ -n "$(git -C "$HOME/private/pirust-wt/$n" rev-list --count t/'"$R"'/..HEAD 2>/dev/null)" ]; } || continue
+      t=$("$G" pr list --repo "'"$R"'" --state open --head "t/$n" --json number 2>/dev/null)
+      p=$(jq -e "length" <<<"$t" 2>/dev/null)
+      [ "${p:-0}" -gt 0 ] && j=$("$G" pr view "$n" --json reviews 2>/dev/null) && jq -e "[.reviews[]|select(.state==\"APPROVED\" or .state==\"CHANGES_REQUESTED\")]|length==0" <<<"$j" >/dev/null 2>&1 && printf "%s " "$n"
+    done' 2>/dev/null)
+  # $nv is a space-separated list of ticket numbers; word splitting is required to count them.
+  # shellcheck disable=SC2086
+  [ -n "${nv// /}" ] && out+=("PRs without a review verdict: $(set -- $nv; echo $#) (${nv% })")
+fi
+
+# 3. Idle agent slots: the pool holds $MAX agents; an agent is busy iff its ticket is In progress
+# (an "In review" agent is done: its PR sits for review). Only when Ready tickets exist to fill them.
+if [ "${rn:-0}" -gt 0 ]; then
+  s=$((MAX - ipn)); [ $s -lt 0 ] && s=0
+  [ $s -gt 0 ] && out+=("Idle agent slots: $s")
+fi
+
+# 4. Agents done but not finished: an agent wrote its HANDOFF.md and stopped, and its ticket is not
+# closed (the daemon never ran `tools/wt finish`, which deletes the file). Offline, fast.
+unclosed=()
+for f in "$HOME"/private/pirust-wt/*/HANDOFF.md; do
+  [ -f "$f" ] || continue
+  n=${f%/HANDOFF.md}; n=${n##*/}
+  st=$(jq -r --arg n "$n" '.[$n].status // "ready"' "$S/finished.json" 2>/dev/null)
+  [ "$st" != closed ] && unclosed+=("$n")
+done
+[ ${#unclosed[@]} -gt 0 ] && out+=("agents finished, not closed: ${#unclosed[@]} (${unclosed[*]})")
+
+if [ ${#out[@]} -gt 0 ]; then printf '%s\n' "${out[@]}"; fi
