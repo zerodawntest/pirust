@@ -4,7 +4,6 @@
 # Prints issue number. Repo is fixed: zerodawntest/pirust.
 set -euo pipefail
 D=$(dirname "$(readlink -f "$0")"); B=$D/board.json; R=zerodawntest/pirust
-GH_TOKEN=$("$D/gh-app-token"); export GH_TOKEN
 fid(){ jq -r --arg f "$1" '.fields[$f].id' "$B"; }
 oid(){ jq -r --arg f "$1" --arg o "$2" '.fields[$f].options[$o] // error("bad \($f): \($o)")' "$B"; }
 valid(){ jq -e --arg f "$1" --arg o "$2" '.fields[$f].options[$o] != null' "$B" >/dev/null; }
@@ -22,9 +21,38 @@ item(){
   local q; q="mutation{ addProjectV2ItemById(input:{projectId:\"$(jq -r .project "$B")\", contentId:\"$nid\"}){ item{ id } } }"
   gh api graphql -f query="$q" --jq .data.addProjectV2ItemById.item.id 2>/dev/null || { sleep 2; gh api graphql -f query="$q" --jq .data.addProjectV2ItemById.item.id; }
 }
+# Lint a ticket body (ticket #139). Prints one line per problem; returns 1 if any.
+lint(){
+  local body=$1
+  local -a probs=()
+  local first
+  first=$(printf '%s\n' "$body" | sed -n '1p')
+  # Rule: the body's first line must start with Files:
+  [ "${first#Files:}" != "$first" ] || probs+=("no Files: line")
+  # Rule: Files: lists at most 3 paths (comma-separated).
+  if [ "${first#Files:}" != "$first" ]; then
+    local count
+    count=$(printf '%s' "${first#Files:}" | tr ',' '\n' | grep -c '[^[:space:]]')
+    [ "$count" -le 3 ] || probs+=("Files: lists more than 3 paths ($count)")
+  fi
+  # Rule: a ## Done when section with at least one line starting with "- Verify:".
+  printf '%s\n' "$body" | awk '/^##[[:space:]]/{ins=($0 ~ /^##[[:space:]]+Done when[[:space:]]*$/)} ins&&/^- Verify:/{f=1} END{exit !f}' || probs+=("no Verify line")
+  # Rule: the body has at most 45 lines.
+  local lines
+  lines=$(printf '%s\n' "$body" | wc -l)
+  [ "$lines" -le 45 ] || probs+=("body has more than 45 lines ($lines)")
+  # Rule: no reference to a factory/*.md path, and no use of the word "skill".
+  printf '%s' "$body" | grep -Eq 'factory/[^[:space:]]*\.md' && probs+=("references a factory .md path")
+  printf '%s' "$body" | grep -Eqw 'skill' && probs+=("references a skill")
+  if [ ${#probs[@]} -gt 0 ]; then
+    printf '%s\n' "${probs[@]}"
+    return 1
+  fi
+}
 cmd=${1:-}; shift || true
 case $cmd in
 new)
+  GH_TOKEN=$("$D/gh-app-token"); export GH_TOKEN
   T='' K=Task P='' L='' S=Backlog PR='' SZ='' BODY=''
   while getopts t:k:p:l:s:P:S:b: o; do case $o in t)T=$OPTARG;; k)K=$OPTARG;; p)P=$OPTARG;; l)L=$OPTARG;; s)S=$OPTARG;; P)PR=$OPTARG;; S)SZ=$OPTARG;; b)BODY=$OPTARG;; *)usage;; esac; done
   [ "$BODY" = - ] && BODY=$(cat); BODY=$(printf '%b' "$BODY")
@@ -36,6 +64,7 @@ new)
   { [ -z "$S" ] || valid Status "$S"; } || usage
   { [ -z "$PR" ] || valid Priority "$PR"; } || usage
   { [ -z "$SZ" ] || valid Size "$SZ"; } || usage
+  lint "$BODY" || exit 1
   J=$(gh api "repos/$R/issues" "${args[@]}"); N=$(jq -r .number <<<"$J"); ID=$(jq -r .id <<<"$J")
   [[ ,$L, == *,needs:patrick,* ]] && gh api "repos/$R/issues/$N/assignees" -f "assignees[]=Patrick-Kappen" -f "assignees[]=Patrick-Kappen-SLTN" >/dev/null
   [ -n "$P" ] && gh api "repos/$R/issues/$P/sub_issues" -F sub_issue_id="$ID" >/dev/null
@@ -45,7 +74,25 @@ new)
   I=$(item "$N" "$NID"); setsel "$I" Status "$S"; [ -n "$PR" ] && setsel "$I" Priority "$PR"; [ -n "$SZ" ] && setsel "$I" Size "$SZ"
   echo "$N" ;;
 set)
-  N=$1; shift; I=$(item "$N")
-  while getopts s:P:S:c: o; do case $o in s)setsel "$I" Status "$OPTARG";; P)setsel "$I" Priority "$OPTARG";; S)setsel "$I" Size "$OPTARG";; c)settxt "$I" "Claimed by" "$OPTARG";; *)usage;; esac; done ;;
+  GH_TOKEN=$("$D/gh-app-token"); export GH_TOKEN
+  N=$1; shift
+  S='' PR='' SZ='' CL=''
+  while getopts s:P:S:c: o; do case $o in s)S=$OPTARG;; P)PR=$OPTARG;; S)SZ=$OPTARG;; c)CL=$OPTARG;; *)usage;; esac; done
+  # Lint before any GitHub write: an agent must not be launched on a bad ticket.
+  if [ "$S" = Ready ]; then
+    issue=$("$D/gh-bot" api "repos/$R/issues/$N")
+    kind=$(jq -r '.type.name // ""' <<<"$issue")
+    if [ "$kind" = Task ] || [ "$kind" = Bug ]; then
+      lint "$(jq -r '.body // ""' <<<"$issue")" || exit 1
+    fi
+  fi
+  I=$(item "$N")
+  [ -n "$S" ] && setsel "$I" Status "$S"
+  [ -n "$PR" ] && setsel "$I" Priority "$PR"
+  [ -n "$SZ" ] && setsel "$I" Size "$SZ"
+  [ -n "$CL" ] && settxt "$I" "Claimed by" "$CL" ;;
+lint)
+  [ $# -eq 1 ] || usage
+  lint "$(cat "$1")" ;;
 *) usage ;;
 esac
