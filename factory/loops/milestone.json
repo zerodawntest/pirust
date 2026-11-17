@@ -3,6 +3,7 @@
     {
       "id": "research",
       "role": "researcher",
+      "model": "openai-codex/gpt-6.1-sol",
       "thinking": "medium",
       "tools": "read,grep,find,ls,bash",
       "inputs": ["goal.md"],
@@ -21,6 +22,7 @@
     {
       "id": "review",
       "role": "reviewer",
+      "model": "openai-codex/gpt-6.1-sol",
       "thinking": "medium",
       "tools": "read,grep,find,ls",
       "inputs": ["goal.md", "research.md", "milestone.md"],
@@ -31,6 +33,7 @@
     {
       "id": "architect",
       "role": "architect",
+      "model": "openai-codex/gpt-6.1-sol",
       "thinking": "medium",
       "tools": "read,grep,find,ls,write",
       "inputs": ["goal.md", "milestone.md"],
@@ -49,6 +52,7 @@
     {
       "id": "review2",
       "role": "reviewer",
+      "model": "openai-codex/gpt-6.1-sol",
       "thinking": "medium",
       "tools": "read,grep,find,ls",
       "inputs": ["goal.md", "milestone.md", "adr.md"],
@@ -77,6 +81,7 @@
     {
       "id": "review3",
       "role": "reviewer",
+      "model": "openai-codex/gpt-6.1-sol",
       "thinking": "medium",
       "tools": "read,grep,find,ls",
       "inputs": ["goal.md", "milestone.md", "assessment.md"],
@@ -96,6 +101,7 @@
     {
       "id": "verify",
       "role": "reviewer",
+      "model": "openai-codex/gpt-6.1-sol",
       "thinking": "medium",
       "tools": "read",
       "inputs": ["goal.md", "milestone.md", "TICKETS.md"],
