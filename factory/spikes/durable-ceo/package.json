@@ -1,0 +1,6 @@
+{
+  "name": "durable-ceo-spike",
+  "private": true,
+  "type": "module",
+  "description": "Spike #78: smallest node prototype of the CEO daemon on pi-durable (one conversation, a wake task, reset(handoff), usage read)."
+}
