@@ -139,11 +139,12 @@ test("the third text-only reply writes the fallback HANDOFF.md and ends the step
   assert.ok(handoff.includes("Done: I finished, no handoff (miss 2)."), "Done carries the last assistant text");
   assert.ok(handoff.includes("Files: src/a.rs"), "Files comes from the session's write calls");
   assert.equal(p.stepState().wroteFallback, true);
-  assert.equal(p.stepState().stepCalls, 0, "the step is over: the counters reset for the next agent");
-  assert.equal(p.shutdowns.length, 1, "the run ends: the runner starts a fresh agent");
+  assert.equal(p.stepState().stepCalls, 0, "the step is over: the counters reset for the next step");
+  assert.equal(p.stepState().refreshes, 1, "one in-process context reset");
+  assert.equal(p.shutdowns.length, 0, "no shutdown: the reset is in process, the run continues");
   const log = readFileSync(join(p.worktree, USAGE_LOG), "utf8").trim().split("\n");
   assert.equal(log.length, 1, "one line per step");
-  assert.equal(log[0], "106 1 20 29900 0 fallback", "ticket, step, calls, weighted tokens, refresh n, forced");
+  assert.equal(log[0], "106 1 20 29900 1 fallback", "ticket, step, calls, weighted tokens, refresh n, forced");
 });
 
 test("a valid handoff ends the step and compaction costs no LLM call", async () => {
@@ -161,17 +162,23 @@ test("a valid handoff ends the step and compaction costs no LLM call", async () 
   const result = await p.handoffTool.execute("c21", params, undefined, undefined, {} as never);
   assert.equal(result.terminate, true, "the handoff ends the run on its own tool result");
   const r = p.run(assistantTurn("", [{ id: "c21", name: "handoff", arguments: params }]), { messageEntryId: "c21" });
-  assert.equal(r, undefined, "a valid handoff returns no entries");
+  const comp = (r!.entries as Record<string, unknown>[])[0] as Record<string, unknown>;
+  assert.equal(comp.type, "compaction", "a valid handoff appends a compaction entry");
+  assert.equal(comp.firstKeptEntryId, "c21", "the reset keeps the handoff turn");
+  assert.equal(comp.tokensBefore, 1000, "tokensBefore is the pre-reset context");
+  assert.ok(String(comp.summary).startsWith("Ticket #106 Forced handoff in agent-guard: see below."), "the reset summary starts with the ticket");
+  assert.ok(String(comp.summary).includes("\nStatus: done\nDone: wrote agent-guard"), "the reset summary carries HANDOFF.md");
+  assert.equal(r!.continue, true, "the run continues on the reset context");
 
   assert.equal(p.stepState().stepCalls, 0, "the step is over");
-  assert.equal(p.shutdowns.length, 1, "the run ends; the runner starts a fresh agent");
+  assert.equal(p.shutdowns.length, 0, "no shutdown: the reset is in process, the same agent continues");
   const compact = p.fire("session_before_compact", { preparation: { firstKeptEntryId: "e5", tokensBefore: 123_456 } });
   const summary = (compact!.compaction as { summary: string }).summary;
   assert.ok(summary.startsWith("Ticket #106 Forced handoff in agent-guard: see below."), "the summary starts with the ticket");
   assert.ok(summary.includes("\nStatus: done\nDone: wrote agent-guard"), "the summary carries HANDOFF.md");
   const c = compact!.compaction as { firstKeptEntryId: string; tokensBefore: number };
   assert.deepEqual({ firstKeptEntryId: c.firstKeptEntryId, tokensBefore: c.tokensBefore }, { firstKeptEntryId: "e5", tokensBefore: 123_456 });
-  assert.equal(readFileSync(join(p.worktree, USAGE_LOG), "utf8").trim(), "106 1 21 27300 0 0", "one line: no text-only reply, no refresh");
+  assert.equal(readFileSync(join(p.worktree, USAGE_LOG), "utf8").trim(), "106 1 21 27300 1 0", "one line: no text-only reply, one refresh");
 });
 
 test("a done handoff with no verified command is an error, so a false done cannot pass", async () => {

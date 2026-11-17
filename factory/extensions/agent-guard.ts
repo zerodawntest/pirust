@@ -9,10 +9,13 @@
 //    other name (belt and braces, the model cannot leave the handoff).
 // 2. A text-only reply there is edited out of the context and a hidden "Call handoff now"
 //    is injected, twice. On the third miss this file writes HANDOFF.md itself.
-// 3. A valid handoff ends the step (the tool's `terminate: true` plus `ctx.shutdown()`);
-//    the runner starts a fresh agent, so there is no in-process reset (design change,
-//    Patrick 2026-11-17). `session_before_compact` supplies the summary (ticket +
-//    HANDOFF.md), so pi's own compaction never pays for an LLM summary.
+// 3. A valid handoff resets the context in process (no LLM summary): the `turn_end` after the
+//    handoff appends a `compaction` entry (summary = ticket + HANDOFF.md, `firstKeptEntryId` =
+//    the handoff turn, `tokensBefore` = the pre-reset context) and returns `continue: true`, so
+//    the same agent keeps working on a fresh context (pi-hooks: Reset context in process). The
+//    cap resets per step; `refreshes` counts the in-process resets, capped at `MAX_REFRESHES`.
+//    `session_before_compact` supplies the same summary, so pi's own compaction never pays for
+//    an LLM summary.
 //
 // Type-only imports: an agent loads this file with `node`, which strips types and installs
 // nothing, so it must keep no runtime import beyond `node:` builtins and ./agent-tools.ts.
@@ -27,6 +30,8 @@ export const LIMIT_WEIGHTED_TOKENS = 120_000;
 export const CACHE_WEIGHT = 0.1;
 /** Text-only replies at the limit; the third one loses the step (the extension hands off). */
 export const MAX_TEXT_ONLY_REPLIES = 2;
+/** In-process context resets per agent; past this the step is left to the runner (needs:split). */
+export const MAX_REFRESHES = 3;
 /** Tool results in the `context` hook are cut to `TRIM_CHARS` from the first 300 chars. */
 export const TRIM_KEEP_TURNS = 3;
 export const TRIM_CHARS = 300;
@@ -54,7 +59,7 @@ let stepCalls = 0;
 let stepWeighted = 0;
 let textReplies = 0;
 let atLimit = false;
-/** Kept for the usage log's column order; the in-process reset was dropped, so it stays 0. */
+/** In-process context resets so far (the `reset in process` cap); capped at MAX_REFRESHES. */
 let refreshes = 0;
 let stepNo = 1;
 let ticket = "0";
@@ -66,8 +71,20 @@ export function stepState() {
 	return { stepCalls, stepWeighted, textReplies, atLimit, refreshes, stepNo, ticket, wroteFallback };
 }
 
-/** The step is over: one line to the usage log, and the run ends so the runner starts a fresh agent. */
+/** The in-process reset entry (no LLM): the whole run is summarized as ticket + HANDOFF.md, and
+ *  the context is kept from `firstKeptEntryId` (the handoff turn) on, so `continue` starts fresh. */
+function compactionEntry(ctx: { getContextUsage?: () => { tokens?: number } | undefined }, firstKeptEntryId: string) {
+	return {
+		type: "compaction",
+		summary: `${taskText}\n\n${readFileSync(HANDOFF_FILE, "utf8")}`,
+		firstKeptEntryId,
+		tokensBefore: ctx.getContextUsage?.()?.tokens ?? 0,
+	};
+}
+
+/** The step is over: one line to the usage log; `refreshes` counts the in-process context resets. */
 function endStep(ctx: { shutdown?: () => void }, forced: string) {
+	refreshes += 1;
 	const path = join(process.cwd(), USAGE_LOG);
 	mkdirSync(dirname(path), { recursive: true });
 	appendFileSync(path, `${ticket} ${stepNo} ${stepCalls} ${Math.round(stepWeighted)} ${refreshes} ${forced}\n`);
@@ -138,6 +155,8 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 		if (!atLimit) return;
+		// A step past the in-process reset cap is not guarded: the runner starts a fresh agent.
+		if (refreshes >= MAX_REFRESHES) return;
 
 		// The model has one tool left. A text reply is not a handoff: drop it and ask again.
 		if (calls.length === 0) {
@@ -154,6 +173,7 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 			// Third miss: hand off for the model, from the session's own record.
+			const firstKeptEntryId = (event as { messageEntryId?: string }).messageEntryId!;
 			const files = new Set<string>();
 			let lastText = "";
 			for (const entry of ctx.sessionManager?.getEntries() ?? []) {
@@ -175,15 +195,23 @@ export default function (pi: ExtensionAPI) {
 			writeFileSync(HANDOFF_FILE, `${lines.slice(0, MAX_HANDOFF_LINES).join("\n")}\n`);
 			wroteFallback = true;
 			endStep(ctx, "fallback");
-			ctx.shutdown?.();
-			return;
+			// Same in-process reset as a valid handoff: the model was text-only, so this step
+			// writes no code; a `continue` on the reset context is a fresh agent in this process.
+			return {
+				entries: [...((event as { entries?: unknown[] }).entries ?? []), compactionEntry(ctx, firstKeptEntryId)],
+				continue: true,
+			};
 		}
 
 		if (calls.some((c) => c.name === "handoff")) {
-			// `handoff` wrote HANDOFF.md and its result terminates the run; the runner
-			// starts a fresh agent on the ticket + HANDOFF note.
+			// `handoff` wrote HANDOFF.md; reset the context in process (no LLM summary): the
+			// compaction entry summarizes the whole run as ticket + HANDOFF.md, so the same agent
+			// keeps working on a fresh context. The run no longer ends on the tool's `terminate`.
 			endStep(ctx, String(textReplies));
-			ctx.shutdown?.();
+			return {
+				entries: [...((event as { entries?: unknown[] }).entries ?? []), compactionEntry(ctx, (event as { messageEntryId?: string }).messageEntryId!)],
+				continue: true,
+			};
 		}
 	});
 
