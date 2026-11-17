@@ -4,13 +4,16 @@
 set -euo pipefail
 R=$(dirname "$(dirname "$(readlink -f "$0")")")
 W=$(readlink -f "$1"); shift
-# Agent tools (handoff, #73): pi loads .ts extensions from <cwd>/.pi/extensions and the
+# Agent tools (handoff, #73): pi loads .ts extensions from <cwd>/.pi/extensions, and the
 # worktree is the only writable place in the sandbox, so install them into the worktree.
 # Tests stay out: pi would load them as extensions and node:test would run them there.
+# The templates load only agent-guard.ts with -e: it imports agent-tools.ts, so one -e
+# registers the handoff tool. Two -e paths would register it twice and pi refuses to start
+# ("Tool \"handoff\" conflicts"), so never list both.
 mkdir -p "$W/.pi/extensions"
 for f in "$R"/factory/extensions/*.ts; do [[ "$f" == *.test.ts ]] || cp -f "$f" "$W/.pi/extensions/"; done
 HCB=$(readlink -f "$(command -v hc)" 2>/dev/null || true)
-H=$HOME; S=$H/.pig/sandbox; A=$S/agent
+H=$HOME; S=$H/.pi/sandbox; A=$S/agent
 mkdir -p "$S/cargo" "$A/sessions"; touch "$A/models.json"
 [ -f "$A/settings.json" ] || jq '{defaultProvider:"ibm-next",defaultModel:"qwen38-flash-next",enableAnalytics:false,enableInstallTelemetry:false,hideThinkingBlock:true}' "$H/.pi/agent/settings.json" > "$A/settings.json"
 if ! command -v cargo >/dev/null || ! command -v bwrap >/dev/null; then eval "$(cd "$R" && devenv print-dev-env)"; fi
@@ -20,13 +23,13 @@ args=(
   --ro-bind-try /bin /bin --ro-bind-try /usr /usr
   --proc /proc --dev /dev --tmpfs /tmp --tmpfs /run/user
   --tmpfs "$H"
-  --bind "$A" "$H/.pi/agent" --ro-bind "$H/.pi/agent/models.json" "$H/.pi/agent/models.json"
+  --bind "$A" "$A" --ro-bind "$H/.pi/agent/models.json" "$A/models.json"
   --bind "$S/cargo" "$H/.cargo"
   --ro-bind /run/agenix/gateway_key_pi /run/agenix/gateway_key_pi
   --ro-bind /run/agenix/ibm_next_api_key /run/agenix/ibm_next_api_key
   --ro-bind-try "$H/private/pirust-src" /src ${HCB:+--ro-bind /dev/null "$HCB"}
   --bind "$W" "$W" --ro-bind /dev/null "$W/.git" --chdir "$W"
-  --setenv HOME "$H" --setenv CARGO_HOME "$H/.cargo" --setenv PI_CODING_AGENT_DIR "$H/.pi/agent"
+  --setenv HOME "$H" --setenv CARGO_HOME "$H/.cargo" --setenv PI_CODING_AGENT_DIR "$A"
 )
 for v in GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN SSH_AUTH_SOCK GPG_AGENT_INFO DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR HC_TERMINAL_SOCKET GIT_CONFIG_COUNT; do args+=(--unsetenv "$v"); done
 exec bwrap "${args[@]}" "$@"

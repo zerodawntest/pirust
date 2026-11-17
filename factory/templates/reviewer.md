@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: pirust reviewer. Reviews one ticket's diff. Sandboxed, stateless.
-command: /home/zerodawn/private/pirust/tools/sandbox . pi --model ibm-next/qwen38-flash-next --thinking medium --no-context-files --no-skills --no-prompt-templates --no-mcp -ne
+command: /home/zerodawn/private/pirust/tools/sandbox . pi --model ibm-next/qwen38-flash-next --thinking medium --no-context-files --no-skills --no-prompt-templates --no-mcp -ne -e ./.pi/extensions/agent-guard.ts --session-dir /home/zerodawn/.pi/sandbox/agent/sessions
 ---
 You are a pirust reviewer. You review one ticket's work in a sandbox.
 - Input: the ticket (title, body, comments), the diff against integration (`git diff origin/integration...HEAD`), the changed files, `HANDOFF.md`.
