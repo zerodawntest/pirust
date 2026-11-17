@@ -24,8 +24,23 @@
 5. **Eval** (script): `evals/` holds fixed replay cases (closed tickets with their worktree at the start commit, plus a scorer). Each experiment runs baseline vs variant N times. Accept rule from metrics.md. The result table goes on the ticket.
 6. **Apply** at the next lock window (process-review.md). Record before/after in `changes.md`. A week later the KPI is checked again. If it did not move, the change is reverted.
 
+## Cadence (Patrick: hours, not weeks)
+| What | When | Cost |
+|---|---|---|
+| Record + score | every run / every 15 min | script, 0 tokens |
+| Trigger check | every score | script |
+| AI review (step 4) | on a trigger, else every 4h if ≥ 10 new runs since the last review | sol, input = KPI table + 3 samples (~20k) |
+| Canary decision | after every 10 runs on the variant | script |
+| Research | event: upstream pi/pi-durable commits (script `git fetch` hourly), or a failure class the review cannot explain; else every 12h | sol, bounded to 1 loop run |
+
+## How data becomes a decision
+- Sources, all read by scripts: pi session JSONL (provider token counts per message, stopReason, tool calls, tool errors), hc finish events (exit, duration), git/GitHub (merged, CI result, reverts, fixer rounds), loop ledger (gate scores), port counters (files, cargo errors, tests, parity diffs).
+- Every run row carries `ver` = hash of the role template + skills + model + thinking. KPIs are grouped by `ver`, so each change is visible as its own column. Without `ver` no number can be tied to a change.
+- Canary: a new `ver` runs on 1 of the 4 agent slots. After 10 runs, a script compares it with the current `ver` on the same window: promote if first-pass rate is not lower and median tokens per pass ≤ +10%; roll back if worse; else 10 more runs (max 30, then roll back).
+- Noise: no decision on fewer than 10 runs. Medians, not means (one runaway agent must not decide). Replay evals (step 5) give the same tickets to both versions, for changes that cannot wait for live traffic.
+
 ## Research that turns into change
-- Weekly research loop (sol, scheduled): what changed upstream in pi and pi-durable (the port target moves), pi releases, and published practice for agent factories and ports. Output: proposals in the same format as step 4. They go through step 5 like everything else. Nothing is applied because it was read somewhere.
+- Research output is proposals in the step 4 format. They go through canary or eval like everything else. Nothing is applied because it was read somewhere.
 
 ## Guardrails (so it cannot run wild)
 - Budgets in code: tokens per day per model, max agents (4), max loop rounds, max open process-review tickets (1). The dispatcher refuses work past a budget and posts one digest line.
@@ -34,8 +49,10 @@
 - Only Patrick approves changes to models, roles, phases or budgets.
 
 ## Build order (each is one ticket, each needs the one before)
-1. Wire `tools/usage` into agent exit (wt finish/stopgap) and the loop. Prove: ledger rows = runs.
-2. `tools/kpi` + hourly timer + digest line.
+1. Wire `tools/usage` into agent exit (wt finish/stopgap) and the loop. Prove: ledger rows = runs. (#174)
+1b. `ver` + role on every row: `tools/agent` writes a run record, `tools/usage` joins it.
+2. `tools/kpi` (grouped by `ver`) + 15-min timer + digest line.
+2b. Canary slot in `tools/agent` + promote/rollback script.
 3. Trigger → process-review ticket.
 4. `evals/` runner + 5 replay cases from closed tickets.
 5. process-review template + weekly research loop.
