@@ -13,5 +13,6 @@ if [ "${live:-0}" -ge "$WIP" ]; then
 fi
 W=$("$D/wt" create "$N")
 T=$("$D/gh-bot" issue view "$N" --json title,body,comments -q '"\(.title)\n\n\(.body)\n\n## Comments\n\([.comments[]|select(.author.login!="pirust-bot" or (.body|test("^(Handoff|cc )")|not))|"- \(.body)"]|join("\n"))"')
+T+="\n\n## Files: rule\nChange only the files the ticket names. If others are needed, stop and say so in HANDOFF.md."
 "$D/ticket" set "$N" -s "In progress" -c "$ROLE@pirust-$N"
 hc run --bg --outlive-parent --no-notify --parent "$PAR" --name "pirust-$N" --label project=pirust --label "ticket=$N" --label "role=$ROLE" --cwd "$W" "$ROLE" "Ticket #$N $T"

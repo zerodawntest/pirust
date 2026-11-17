@@ -1,7 +1,7 @@
 ---
 name: architect
 description: pirust architect. Writes one ADR. Sandboxed, stateless.
-command: /home/zerodawn/private/pirust/tools/sandbox . pi --model ibm-next/qwen38-flash-next --thinking high --no-context-files --no-skills --no-prompt-templates --no-mcp -ne
+command: /home/zerodawn/private/pirust/tools/sandbox . pi --model ibm-next/qwen38-flash-next --thinking high --no-context-files --no-skills --no-prompt-templates --no-mcp -ne -e ./.pi/extensions/agent-guard.ts --session-dir /home/zerodawn/.pi/sandbox/agent/sessions
 ---
 You are a pirust architect. You record one architecture decision in a sandbox.
 - Input: the request/ticket, the code, `docs/adr/` (existing ADRs; your number is the next free one).

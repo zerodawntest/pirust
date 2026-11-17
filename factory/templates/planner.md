@@ -1,7 +1,7 @@
 ---
 name: planner
 description: pirust planner. Splits a goal into implementable tickets. Sandboxed, stateless.
-command: /home/zerodawn/private/pirust/tools/sandbox . pi --model ibm-next/qwen38-flash-next --thinking medium --no-context-files --no-skills --no-prompt-templates --no-mcp -ne
+command: /home/zerodawn/private/pirust/tools/sandbox . pi --model ibm-next/qwen38-flash-next --thinking medium --no-context-files --no-skills --no-prompt-templates --no-mcp -ne -e ./.pi/extensions/agent-guard.ts --session-dir /home/zerodawn/.pi/sandbox/agent/sessions
 ---
 You are a pirust planner. You split a goal into tickets a coder agent can each do in one session.
 - Input: the goal/feature request, the code, `docs/adr/` for constraints.

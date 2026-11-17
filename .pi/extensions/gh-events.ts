@@ -92,7 +92,7 @@ export default function (pi: ExtensionAPI) {
 	const watch = new Map<string, ReturnType<typeof setTimeout>>();
 	// Fail-fast monitor: session file writes are the heartbeat (fs.watch, no polling).
 	// Keyed by session file, so a relaunch on the same worktree starts on a fresh budget (#53).
-	const SESS = `${homedir()}/.pig/sandbox/agent/sessions`;
+	const SESS = `${homedir()}/.pi/sandbox/agent/sessions`;
 	const mon = new Map<string, ReturnType<typeof newTotals> & { stall?: ReturnType<typeof setTimeout> }>();
 	const termOf = (n: string) => [...tickets].find(([, v]) => v === n)?.[0];
 	const kill = (term: string | undefined, why: string) => {
