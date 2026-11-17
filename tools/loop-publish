@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# loop-publish NAME PARENT [LABELS]  Create the tickets of a loop whose verify gate passed.
+# All or nothing: every `# title` section (bodies use ## headings) of TICKETS.md must pass `tools/ticket lint` first.
+# LOOP_PUBLISH_DRY=1 lints and prints the titles without creating anything.
+set -euo pipefail
+D=$(dirname "$(readlink -f "$0")")
+NAME=${1:?usage: loop-publish NAME PARENT [LABELS]}; PARENT=${2:?PARENT}; LABELS=${3:-area:port}
+S=${PIRUST_LOOPS:-$HOME/.pig/loops}/$NAME
+[ ! -f "$S/state.json" ] || { echo "loop-publish: $NAME has not finished (state.json)" >&2; exit 1; }
+last=$(tail -1 "$S/ledger.jsonl" 2>/dev/null || true)
+if ! jq -e '.stage=="verify" and .exit==0' <<<"$last" >/dev/null 2>&1 || ! jq -e '.verdict=="pass"' "$S/review.json" >/dev/null 2>&1; then
+  echo "loop-publish: $NAME verify gate did not pass" >&2; exit 1
+fi
+[ ! -f "$S/published" ] || { echo "loop-publish: $NAME already published:$(cat "$S/published")" >&2; exit 1; }
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+awk -v d="$T" '/^# /{n++; f=sprintf("%s/%02d",d,n); print substr($0,3) > (f ".title"); printf "" > (f ".md"); next} n{print >> (f ".md")}' "$S/TICKETS.md"
+compgen -G "$T/*.title" >/dev/null || { echo "loop-publish: no '# ' tickets in $S/TICKETS.md" >&2; exit 1; }
+bad=0
+for b in "$T"/*.title; do
+  if ! "$D/ticket" lint "${b%.title}.md" >"$T/lint" 2>&1; then echo "lint: $(cat "$b"): $(tr '\n' ' ' <"$T/lint")" >&2; bad=1; fi
+done
+[ "$bad" = 0 ] || exit 1
+out=""
+for b in "$T"/*.title; do
+  if [ -n "${LOOP_PUBLISH_DRY:-}" ]; then out="$out|$(cat "$b")"; continue; fi
+  n=$("$D/ticket" new -t "$(cat "$b")" -k Task -p "$PARENT" -l "$LABELS" -s Ready -S S -b - <"${b%.title}.md" | grep -oE '^[0-9]+$' | tail -1)
+  out="$out #$n"
+done
+[ -n "${LOOP_PUBLISH_DRY:-}" ] || echo "$out" >"$S/published"
+echo "$out"
