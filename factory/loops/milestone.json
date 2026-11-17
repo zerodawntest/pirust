@@ -5,8 +5,9 @@
       "role": "researcher",
       "thinking": "medium",
       "tools": "read,grep,find,ls,bash",
+      "inputs": ["goal.md"],
       "output": "research.md",
-      "prompt": "Survey the repo, docs, and skills relevant to the goal and gather the facts, constraints, and prior art the writer will need. Write your findings, each with a file path and line reference, to research.md."
+      "prompt": "Survey the repo, docs, and skills relevant to the goal and gather the facts, constraints, and prior art the writer will need. Write your findings, each with a file path and line reference, to research.md. Inputs:"
     },
     {
       "id": "write",
@@ -22,6 +23,7 @@
       "role": "reviewer",
       "thinking": "medium",
       "tools": "read,grep,find,ls",
+      "inputs": ["goal.md", "research.md", "milestone.md"],
       "output": "review.json",
       "gate": { "back": "research", "max_rounds": 3 },
       "prompt": "Review milestone.md against the goal and research.md for gaps, contradictions, and untestable claims. Write your verdict to review.json as {\"verdict\":\"pass\"|\"revise\",\"score\":0-10,\"issues\":[\"...\"]}."
@@ -31,7 +33,7 @@
       "role": "architect",
       "thinking": "medium",
       "tools": "read,grep,find,ls,write",
-      "inputs": ["milestone.md"],
+      "inputs": ["goal.md", "milestone.md"],
       "output": "adr.md",
       "prompt": "Design the architecture that satisfies the milestone and record the key decisions, tradeoffs, and rejected alternatives. Write one ADR to adr.md. Inputs:"
     },
@@ -40,24 +42,26 @@
       "role": "writer",
       "thinking": "low",
       "tools": "read,write",
+      "inputs": ["goal.md", "milestone.md", "adr.md"],
       "output": "milestone.md",
-      "prompt": "Revise the milestone spec to fix every issue the reviewer raised, keeping it a single testable description. Write the result to milestone.md."
+      "prompt": "Revise the milestone spec to fix every issue the reviewer raised, keeping it a single testable description. Write the result to milestone.md. Inputs:"
     },
     {
       "id": "review2",
       "role": "reviewer",
       "thinking": "medium",
       "tools": "read,grep,find,ls",
+      "inputs": ["goal.md", "milestone.md", "adr.md"],
       "output": "review.json",
       "gate": { "back": "write2", "max_rounds": 2 },
-      "prompt": "Re-review milestone.md against the goal and the ADR in adr.md, checking that the earlier issues are resolved. Write your verdict to review.json as {\"verdict\":\"pass\"|\"revise\",\"score\":0-10,\"issues\":[\"...\"]}."
+      "prompt": "Re-review milestone.md against the goal and the ADR in adr.md, checking that the earlier issues are resolved. Write your verdict to review.json as {\"verdict\":\"pass\"|\"revise\",\"score\":0-10,\"issues\":[\"...\"]}. Inputs:"
     },
     {
       "id": "assess",
       "role": "assessor",
       "thinking": "medium",
       "tools": "read,grep,find,ls,bash",
-      "inputs": ["milestone.md", "adr.md"],
+      "inputs": ["goal.md", "milestone.md", "adr.md"],
       "output": "assessment.md",
       "prompt": "Assess the feasibility of the milestone and the ADR, calling out cost, risk, and any missing steps. Write your assessment to assessment.md. Inputs:"
     },
@@ -66,32 +70,35 @@
       "role": "writer",
       "thinking": "low",
       "tools": "read,write",
+      "inputs": ["goal.md", "milestone.md", "adr.md", "assessment.md"],
       "output": "milestone.md",
-      "prompt": "Revise the milestone spec once more, reconciling it with the ADR and the feasibility assessment. Write the result to milestone.md."
+      "prompt": "Revise the milestone spec once more, reconciling it with the ADR and the feasibility assessment. Write the result to milestone.md. Inputs:"
     },
     {
       "id": "review3",
       "role": "reviewer",
       "thinking": "medium",
       "tools": "read,grep,find,ls",
+      "inputs": ["goal.md", "milestone.md", "assessment.md"],
       "output": "review.json",
       "gate": { "back": "write3", "max_rounds": 2 },
-      "prompt": "Final review of milestone.md against the goal, adr.md, and assessment.md for any remaining gaps. Write your verdict to review.json as {\"verdict\":\"pass\"|\"revise\",\"score\":0-10,\"issues\":[\"...\"]}."
+      "prompt": "Final review of milestone.md against the goal, adr.md, and assessment.md for any remaining gaps. Write your verdict to review.json as {\"verdict\":\"pass\"|\"revise\",\"score\":0-10,\"issues\":[\"...\"]}. Inputs:"
     },
     {
       "id": "break",
       "role": "planner",
       "thinking": "low",
       "tools": "read,write",
+      "inputs": ["goal.md", "milestone.md", "adr.md", "assessment.md"],
       "output": "TICKETS.md",
-      "prompt": "Break the milestone into independently startable tickets, each naming the files it changes and its narrowest verification command. Write the tickets to TICKETS.md."
+      "prompt": "Break the milestone into independently startable tickets, each naming the files it changes and its narrowest verification command. Write the tickets to TICKETS.md. Inputs:"
     },
     {
       "id": "verify",
       "role": "reviewer",
       "thinking": "medium",
       "tools": "read",
-      "inputs": ["TICKETS.md"],
+      "inputs": ["goal.md", "milestone.md", "TICKETS.md"],
       "output": "review.json",
       "gate": { "back": "break", "max_rounds": 3 },
       "prompt": "Check TICKETS.md covers every requirement in the milestone, with no gaps and no overlaps. Write your verdict to review.json as {\"verdict\":\"pass\"|\"revise\",\"score\":0-10,\"issues\":[\"...\"]}. Inputs:"
