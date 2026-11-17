@@ -1,7 +1,0 @@
-[run:recover] reopened: /home/zerodawn/private/pirust-wt/78/factory/spikes/durable-ceo/sessions/2026-11-17T00-04-25-331Z_01a1e6d1-b473-70d9-96ba-13397fe5f949.jsonl
-[run:recover] UNEXPECTED tail: []
-[wake] scheduled instruction fires
-[wake] scheduled answer: WAKE-OK
-[handoff] first request messages = null
-[handoff] first request has ONLY handoff+prompt: NO
-[usage] tokens= {"input":424,"output":286,"cacheRead":16352,"cacheWrite":0,"total":17062} context= {"tokens":5788,"contextWindow":163840,"percent":3.5327148437499996}
