@@ -1,0 +1,3 @@
+{"session":"a.jsonl","ticket":171,"model":"qwen38-flash-next","turns":2,"toolCalls":2,"toolErrors":1,"input":2400,"output":600,"cacheRead":60000,"cacheWrite":0,"cost":0,"ts":"2026-11-17T00:23:08Z"}
+{"session":"b.jsonl","ticket":172,"model":"qwen38-flash-next","turns":2,"toolCalls":2,"toolErrors":0,"input":1000,"output":200,"cacheRead":10000,"cacheWrite":0,"cost":0,"ts":"2026-11-17T01:00:00Z"}
+{"session":"c.jsonl","ticket":173,"model":"qwen38-flash-next","turns":2,"toolCalls":2,"toolErrors":1,"input":600,"output":200,"cacheRead":0,"cacheWrite":0,"cost":0,"ts":"2026-11-17T02:00:00Z"}

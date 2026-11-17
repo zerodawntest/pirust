@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# kpi  Compute the factory's 24h KPIs from the usage ledger and the digest, print one
+# JSON object, append it to $KPI_OUT, and append one digest line. See ticket #176.
+#
+# Inputs (overridable): ledger $HOME/.pi/pirust-usage.jsonl (one aggregate line per
+# session, written by tools/usage), digest $HOME/.pi/pirust-digest.log (one line per
+# action, prefix `<ISO time> `). Window: the last 24h, or $KPI_SINCE (ISO time) if set.
+#
+# Output JSON: runs input output cacheRead cacheHit toolErrorRate merged firstPass
+# reverts strayLaunches tokensPerMerged.
+set -euo pipefail
+
+ledger=${KPI_LEDGER:-$HOME/.pi/pirust-usage.jsonl}
+digest=${KPI_DIGEST:-$HOME/.pi/pirust-digest.log}
+since=${KPI_SINCE:-$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)}
+out=${KPI_OUT:-$HOME/.pi/kpi.jsonl}
+
+# A missing input reads as empty (the sums are 0, the digest contributes nothing).
+[ -f "$ledger" ] || : >"$ledger"
+[ -f "$digest" ] || : >"$digest"
+
+# The `firstPass` and `strayLaunches` definitions reference "the whole digest", so `done`
+# counts are taken over the whole digest; `merged`/`reverts`/launches are window-only.
+since_epoch=$(date -d "$since" +%s)
+
+# Ledger sums for rows in the window (all `ts` are `...Z`, so string compare is ordered).
+read -r runs input output cacheRead toolCalls toolErrors <<<"$(jq -rcs \
+	--arg since "$since" \
+	'[ .[] | select(.ts >= $since) ] as $r
+	| [ ($r | length),
+	    ([ $r[].input // 0 ] | add // 0),
+	    ([ $r[].output // 0 ] | add // 0),
+	    ([ $r[].cacheRead // 0 ] | add // 0),
+	    ([ $r[].toolCalls // 0 ] | add // 0),
+	    ([ $r[].toolErrors // 0 ] | add // 0)
+	  ] | @tsv' "$ledger" 2>/dev/null)"
+: "${runs:=0}" "${input:=0}" "${output:=0}" "${cacheRead:=0}" "${toolCalls:=0}" "${toolErrors:=0}"
+
+# Whole-digest `agent #<t> done` counts: a ticket that finishes on its first agent has
+# exactly one such line; more than one means it was relaunched (not first-pass).
+declare -A fin
+while read -r _ rest; do
+	while read -r t; do
+		[ -n "$t" ] && fin[$t]=$(( ${fin[$t]:-0} + 1 ))
+	done < <(grep -oE 'agent #[0-9]+ done' <<<"$rest" | grep -oE '[0-9]+' || true)
+done <"$digest"
+
+# Digest lines in the window: merges, reverts, and stray launches (launched but never done).
+# A `stopgap: launched` line names its ticket with `#<t>`; a `driver: merged PR <n> (#<t>)`
+# line names the merged ticket inside `(#<t>)`.
+merged=0 firstpass=0 reverts=0 stray=0
+inw=$(mktemp)
+while IFS= read -r line; do
+	ts=${line%% *}
+	[ "$ts" = "$line" ] && continue           # no leading time -> not a timed digest line
+	e=$(date -d "$ts" +%s 2>/dev/null) || continue
+	[ "$e" -ge "$since_epoch" ] && printf '%s\n' "$line" >>"$inw"
+done <"$digest"
+
+while read -r line; do
+	# merged: `driver: merged PR <n> (#<t>)` — first `#<t>` after "merged PR" is the ticket.
+	if grep -qE 'merged PR [0-9]+ \(#[0-9]+\)' <<<"$line"; then
+		t=$(grep -oE 'merged PR [0-9]+ \(#[0-9]+\)' <<<"$line" | grep -oE '[0-9]+' | tail -1)
+		merged=$(( merged + 1 ))
+		[ "${fin[$t]:-0}" -eq 1 ] && firstpass=$(( firstpass + 1 ))
+	fi
+	grep -qiE 'revert' <<<"$line" && reverts=$(( reverts + 1 ))
+	if grep -q 'stopgap: launched' <<<"$line"; then
+		t=$(grep -oE '#[0-9]+' <<<"$line" | grep -oE '[0-9]+' | head -1)
+		[ -n "$t" ] && [ "${fin[$t]:-0}" -eq 0 ] && stray=$(( stray + 1 ))
+	fi
+done <"$inw"
+rm -f "$inw"
+
+# Emit one JSON object. Ratios are rounded to 2 decimals; divide-by-zero yields null.
+json=$(jq -cn \
+	--argjson runs "$runs" --argjson input "$input" --argjson output "$output" \
+	--argjson cacheRead "$cacheRead" --argjson toolCalls "$toolCalls" --argjson toolErrors "$toolErrors" \
+	--argjson merged "$merged" --argjson firstpass "$firstpass" --argjson reverts "$reverts" \
+	--argjson stray "$stray" \
+	'{
+		runs: $runs, input: $input, output: $output, cacheRead: $cacheRead,
+		cacheHit: (if ($input + $cacheRead) > 0
+			then ((($cacheRead / ($input + $cacheRead)) * 100 | round) / 100) else null end),
+		toolErrorRate: (if $toolCalls > 0
+			then ((($toolErrors / $toolCalls) * 100 | round) / 100) else null end),
+		merged: $merged,
+		firstPass: (if $merged > 0
+			then ((($firstpass / $merged) * 100 | round) / 100) else null end),
+		reverts: $reverts,
+		strayLaunches: $stray,
+		tokensPerMerged: (if $merged > 0 then (($input + $output) / $merged) else null end)
+	}')
+
+# Append to the KPI log and to the digest (one summary line the lead reads).
+mkdir -p "$(dirname "$out")"
+printf '%s\n' "$json" >>"$out"
+printf '%s kpi: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(jq -r \
+	'"merged=\(.merged) firstPass=\(.firstPass) cacheHit=\(.cacheHit) tokensPerMerged=\(.tokensPerMerged)"' \
+	<<<"$json")" >>"$digest"
+
+printf '%s\n' "$json"
