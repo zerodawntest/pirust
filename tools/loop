@@ -45,19 +45,22 @@ emit_ledger() {
   local id=$1 round=$2 score=$3 code=$4 model=$5
   local log="$id.r$round.log" input output cacheRead cacheWrite stop
   local -a u
-  mapfile -t u < <(jq -s '
+  # A real stage log mixes pi's stderr warnings in with the JSON events (`2>&1`), and jq
+  # fails on a whole-file parse, so keep only the lines that are valid JSON. `fromjson?`
+  # yields nothing for a warning line; `add // 0` keeps a warning-only or empty log at 0.
+  mapfile -t u < <(jq -R 'fromjson? // empty' "$log" | jq -s '
     [ .[] | select(.type == "message_end" and .message.role == "assistant") ] as $a
     | [ ([ $a[].message.usage.input ] | add // 0),
         ([ $a[].message.usage.output ] | add // 0),
         ([ $a[].message.usage.cacheRead ] | add // 0),
-        ([ $a[].message.usage.cacheWrite ] | add // 0) ] | .[]' "$log")
-  input=${u[0]}
-  output=${u[1]}
-  cacheRead=${u[2]}
-  cacheWrite=${u[3]}
-  stop=$(jq -s -r '
+        ([ $a[].message.usage.cacheWrite ] | add // 0) ] | .[]')
+  input=${u[0]:-0}
+  output=${u[1]:-0}
+  cacheRead=${u[2]:-0}
+  cacheWrite=${u[3]:-0}
+  stop=$(jq -R 'fromjson? // empty' "$log" | jq -s -r '
     [ .[] | select(.type == "message_end" and .message.role == "assistant")
-      | .message.stopReason ] | .[-1] // "null"' "$log")
+      | .message.stopReason ] | .[-1] // "null"')
   printf '{"stage":"%s","round":%s,"score":%s,"exit":%s,"model":"%s","stop":"%s","input":%s,"output":%s,"cacheRead":%s,"cacheWrite":%s}\n' \
     "$id" "$round" "$score" "$code" "$model" "$stop" "$input" "$output" "$cacheRead" "$cacheWrite" >>"$LEDGER"
 }
