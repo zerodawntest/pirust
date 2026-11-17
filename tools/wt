@@ -49,12 +49,22 @@ refresh)
   # Ready, not blocked: the next agent picks it up, resolves the markers, then finishes.
   "$D/ticket" set "$N" -s Ready
   if [ "$applied" = 0 ] && [ -z "$M" ]; then
-    "$D/gh-bot" issue comment "$N" -b "Blocked: the ticket diff does not apply onto $B; patch kept in $p." >/dev/null
+    # The next step is a FRESH agent (never reuse), launched on ticket + HANDOFF note,
+    # so write what it must do INTO HANDOFF.md — a fresh agent reads that file, not the
+    # issue. Exit nonzero: the running agent is done (agents never run git), the
+    # dispatcher sees the failure and starts the fresh agent.
+    printf "\n## Rebase onto %s: the ticket diff does not apply cleanly\n\nNo conflict markers were produced (the diff was not applied). Recover the work from the patch in \`%s\`, re-apply the ticket, re-run the ticket checks, then run \`wt finish %s\`.\n" "$B" "$p" "$N" >> HANDOFF.md
+    "$D/gh-bot" issue comment "$N" -b "Blocked: the ticket diff does not apply onto $B; patch kept in $p. Fresh agent: recover from that patch, re-apply the ticket, re-run the checks, then \`wt finish $N\`." >/dev/null
     echo "apply-failed $p"; exit 2
   fi
   if [ -n "$M" ]; then
-    "$D/gh-bot" issue comment "$N" -b "Rebase onto $B conflicts; new branch from origin/$B with the ticket diff applied, conflict markers left uncommitted. Resolve markers in $M, re-run the ticket checks, then \`wt finish $N\`." >/dev/null
-    echo "refreshed resolve-markers $M"
+    # Fresh agent (never reuse) removes the markers. It is launched on ticket + HANDOFF
+    # note, so record the files to fix IN HANDOFF.md, not just a GH comment; exit
+    # nonzero so the dispatcher starts that fresh agent. The running agent must not
+    # touch the markers: it has no git and only this step's context.
+    printf "\n## Rebase onto %s: resolve these conflict-marker files\n\nThe branch was rebuilt on origin/%s and the ticket diff re-applied with \`git apply --3way\`. These files carry unresolved conflict markers — open each, remove the markers (keep the correct side), re-run the ticket checks, then run \`wt finish %s\`:\n\n%s\n" "$B" "$B" "$N" "$M" >> HANDOFF.md
+    "$D/gh-bot" issue comment "$N" -b "Rebase onto $B conflicts; new branch from origin/$B with the ticket diff applied, conflict markers left uncommitted. A fresh agent must resolve the markers in $M (see HANDOFF.md), re-run the ticket checks, then \`wt finish $N\`." >/dev/null
+    echo "refreshed resolve-markers $M"; exit 2
   else
     "$D/gh-bot" issue comment "$N" -b "Rebase onto $B is clean: the ticket diff is applied (uncommitted) on a fresh branch. Re-run the ticket checks, then \`wt finish $N\`." >/dev/null
     echo "refreshed"
@@ -86,13 +96,13 @@ finish)
   case $K in Bug) TY=fix;; Feature) TY=feat;; *) TY=chore;; esac
   [ "$staged" = 1 ] && w commit -qS -m "$TY(#$N): $T" -m "$H" -m "Refs #$N" # already committed by the agent
   if ! w rebase -q "origin/$B"; then
-    C=$(w diff --name-only --diff-filter=U | paste -sd, -)
     w rebase --abort
-    # Not a human job: hand the work to the next agent as markers, ticket back to Ready.
-    # Stop here: no PR (the work is uncommitted in the worktree until it is resolved).
-    "$D/wt" refresh "$N"
-    echo "refreshed ${C:-unknown}"
-    exit 0
+    # Not a human job. Rebuild on a fresh base with the diff re-applied, leaving the
+    # conflicts as markers + a HANDOFF note, and exit nonzero: the running agent is
+    # done (agents never run git), so `exec` carries refresh's nonzero exit out to the
+    # dispatcher, which starts a fresh agent that removes the markers and runs `finish`
+    # again. No PR here: the work is uncommitted in the worktree until it is resolved.
+    exec "$D/wt" refresh "$N"
   fi
   w push -q -f origin "$BR"
   P=$("$D/gh-bot" pr list --head "$BR" --json number -q '.[0].number')
