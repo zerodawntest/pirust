@@ -2,9 +2,10 @@
 
 - Everyone runs on **pi** 1.5.1 (Patrick, 2026-11-17). Agent launch: `tools/sandbox . pi ...` (PI_CODING_AGENT_DIR). ceo-guard blocks the pig binary in commands and docs.
 - pi docs: /nix/store/w3j2zc6sidwg028h4b1wqw6yillkf9jm-pi-1.5.1/libexec/pi/docs. Read the relevant doc fully before acting.
-- CEO t1nm and pirust-driver sessions: ~/.pi/agent/sessions/--home-zerodawn-private-pirust--/. Agents: ~/.pig/sandbox/agent/sessions/ (state dir only, mounted as ~/.pi/agent in the sandbox; gh-events watches it).
-- t1nm loads .pi/extensions/*; the driver runs `-ne -e .pi/extensions/ceo-guard.ts`.
-- hc children end with their parent unless `--outlive-parent` (hc --skill l.11).
+- CEO t1nm and pirust-driver sessions: ~/.pi/agent/sessions/--home-zerodawn-private-pirust--/. Agents: ~/.pig/sandbox/agent/sessions/ (state dir only, mounted as ~/.pi/agent in the sandbox; gh-events watches it). The watchdog relaunches the driver inside tools/sandbox with --cwd <wt>, and with --no-session it writes no session file: its last write is then ~/.pi/watchdog/driver-launch.
+- t1nm loads .pi/extensions/*; the driver runs `-ne -e .pi/extensions/ceo-guard.ts` plus `-e .pi/extensions/keepalive.ts`. The watchdog relaunches it with the Restart line of factory/driver.md: `PIRUST_ROLE=driver hc run --bg --no-parent --outlive-parent --name pirust-driver --cwd <wt> tools/sandbox <wt> pi --mode rpc --no-session -ne -e .pi/extensions/keepalive.ts -e .pi/extensions/ceo-guard.ts --model anthropic/claude-opus-5.5 --thinking high "Read factory/STATE.md and factory/driver.md, then drive the factory."` (the two -e paths stay relative: the sandbox binds only <wt>).
+- `tools/watchdog` is the second line of defence (no pi, no LLM, no network), run by a systemd user timer every 2 min: `systemd-run --user --on-calendar=*:00/2:00 --timer --unit=pirust-watchdog ...` — transient, `tools/watchdog install` re-creates it after a reboot (no NixOS rebuild); check: `systemctl --user list-timers | grep pirust-watchdog`. It relaunches a gone driver, sends `continue` to a lead idle 2 min after a compaction and to a driver idle 15 min while the digest grew, and ESCALATEs a dead gh forwarder; the lead itself is only restarted by Patrick.
+- hc children end with their parent unless `--outlive-parent` (hc --skill l.11). The driver and the relaunched agents use it, so they do not die with t1nm.
 - Extension load check: `echo '{"type":"get_state"}' | pi --mode rpc --no-session -e <ext>`; failure prints "Failed to load extension".
 - Pi does not continue after compaction by itself; ceo-guard's own compact (agent_end, 100k) has no onComplete.
 - Persistent: ~/.pi, ~/.pig, ~/private, ~/Documents. Wiped: /tmp, ~/.cache.

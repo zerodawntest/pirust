@@ -1,0 +1,5 @@
+/home/zerodawn/private/pirust-wt/91/tools/sandbox . pi --model ibm-next/qwen38-flash-next --thinking low --no-context-files --no-skills --no-prompt-templates --no-mcp -ne
+/nix/store/w3j2zc6sidwg028h4b1wqw6yillkf9jm-pi-1.5.1/libexec/pi/pi --model ibm-next/qwen38-flash-next --thinking low --no-context-files --no-skills --no-prompt-templates --no-mcp -ne
+bwrap --unshare-all --share-net --die-with-parent --ro-bind /nix /nix --ro-bind /etc /etc --tmpfs /tmp --bind /home/zerodawn/private/pirust-wt/91 /home/zerodawn/private/pirust-wt/91 --chdir /home/zerodawn/private/pirust-wt/91 pi --model ibm-next/qwen38-flash-next --thinking low --no-context-files --no-skills --no-prompt-templates --no-mcp -ne
+/node_modules/.bin/tsc --noEmit
+bash -c 'ps -eo args= | grep -cE "[g]h webhook forward"'

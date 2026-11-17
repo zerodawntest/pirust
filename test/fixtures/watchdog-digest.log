@@ -1,0 +1,4 @@
+2026-11-16T21:55:03Z dispatch: launched #91
+2026-11-16T22:12:40Z issue #91 assigned pirust-bot[bot]: standalone watchdog outside pi
+2026-11-16T22:26:11Z agent #37 steered: soft limit: at 251k (in 126k out 125k cacheRead 0k). Write HANDOFF.md (Status: wip, Done:, Next:, ≤5 lines), commit WIP, stop; a fresh session continues.
+2026-11-16T22:41:09Z agent #37 done: HANDOFF.md written; docs/port/durable-inventory.md only file touched; cargo test -p (no Cargo.toml, docs-only ticket)
