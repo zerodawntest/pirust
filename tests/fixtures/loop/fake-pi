@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# fake-pi  Stand-in for `pi` in the loop tests (see tools/loop): writes the output file the
+# stage asks for, and prints one JSON event so the stage log is not empty.
+# The stage is the role template in --append-system-prompt (coder=write, reviewer=review,
+# planner=done); the round is how many times that stage has run, counted by its log files.
+set -euo pipefail
+shopt -s nullglob
+
+role=
+prev=
+for a in "$@"; do
+  if [ "$prev" = --append-system-prompt ]; then role=$(basename "$a" .md); fi
+  prev=$a
+done
+
+case $role in
+coder)
+  logs=(write.r*.log)
+  {
+    printf 'Answer: '
+    cat goal.md
+    if [ "${#logs[@]}" -gt 1 ]; then printf 'Revised after review (round %s).\n' "${#logs[@]}"; fi
+  } >draft.md
+  printf '{"type":"assistant","stage":"write","round":%s}\n' "${#logs[@]}"
+  ;;
+reviewer)
+  logs=(review.r*.log)
+  verdict=pass
+  # Round 1 always needs a revision; with FAKE_ALWAYS_REVISE every round does.
+  if [ "${FAKE_ALWAYS_REVISE:-0}" = 1 ] || [ "${#logs[@]}" = 1 ]; then verdict=revise; fi
+  printf '{"verdict":"%s","score":0.4}\n' "$verdict" >review.json
+  printf '{"type":"assistant","stage":"review","round":%s,"verdict":"%s"}\n' "${#logs[@]}" "$verdict"
+  ;;
+planner)
+  logs=(done.r*.log)
+  cat draft.md >final.md
+  printf '{"type":"assistant","stage":"done","round":%s}\n' "${#logs[@]}"
+  ;;
+*)
+  echo "fake-pi: unknown role '$role'" >&2
+  exit 1
+  ;;
+esac

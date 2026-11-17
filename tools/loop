@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# loop SPEC.json NAME GOAL.md  Run a multi-stage agent loop with review gates (ticket #142).
+#
+# Spec: {"stages":[{"id","role","thinking","tools","inputs","output","prompt",
+#                  "gate":{"back":ID,"max_rounds":N}}]}
+# One fresh agent per stage, run in the loop dir, that writes its `output` file; the JSON
+# event stream is saved to <id>.r<round>.log. A gate stage's review.json either "pass"s
+# (go on) or "revise"s (go back to gate.back, adding review.json to that stage's inputs).
+#
+# State lives in $HOME/.pig/loops/NAME/ (state.json + the stage output files), so rerunning
+# with the same NAME resumes at the saved stage and round.
+# Exit: 0 all stages done; 2 a gate stopped the loop (max_rounds reached, or the score did
+# not rise in 2 rounds); 3 a stage's output file is missing, or is not valid JSON.
+set -euo pipefail
+
+usage='usage: loop SPEC.json NAME GOAL.md'
+SPEC=${1:?usage: loop SPEC.json NAME GOAL.md}
+NAME=${2:?usage: loop SPEC.json NAME GOAL.md}
+GOAL=${3:?usage: loop SPEC.json NAME GOAL.md}
+if [ "$#" != 3 ]; then echo "$usage" >&2; exit 1; fi
+for f in "$SPEC" "$GOAL"; do
+  if [ ! -f "$f" ]; then echo "loop: missing $f" >&2; exit 1; fi
+done
+if ! command -v jq >/dev/null 2>&1; then echo 'loop: needs jq' >&2; exit 1; fi
+
+# Stages run with the loop dir as cwd and the role templates are repo-relative, so every
+# path handed to an agent must already be absolute.
+SPEC=$(readlink -f "$SPEC")
+GOAL=$(readlink -f "$GOAL")
+R=$(dirname "$(dirname "$(readlink -f "$0")")")
+PI_CMD=${PI_CMD:-pi}
+if [ "${PI_CMD#*/}" != "$PI_CMD" ]; then PI_CMD=$(readlink -f "$PI_CMD"); fi
+MODEL=ibm-next/qwen38-flash-next
+
+S=$HOME/.pig/loops/$NAME
+mkdir -p "$S"
+cd "$S" || exit 1
+cp "$GOAL" goal.md
+LEDGER=$S/ledger.jsonl
+
+mapfile -t IDS < <(jq -r '.stages[].id' "$SPEC")
+mapfile -t ROLES < <(jq -r '.stages[].role' "$SPEC")
+mapfile -t THINKS < <(jq -r '[.stages[] | .thinking // "off"] | .[]' "$SPEC")
+mapfile -t TLS < <(jq -r '[.stages[] | .tools // ""] | .[]' "$SPEC")
+mapfile -t INS < <(jq -r '[.stages[] | (.inputs // []) | join(",")] | .[]' "$SPEC")
+mapfile -t OUTS < <(jq -r '.stages[].output' "$SPEC")
+mapfile -t PROMPTS < <(jq -r '.stages[].prompt' "$SPEC")
+mapfile -t GB < <(jq -r '[.stages[] | .gate.back // ""] | .[]' "$SPEC")
+mapfile -t GM < <(jq -r '[.stages[] | .gate.max_rounds // 0] | .[]' "$SPEC")
+n=${#IDS[@]}
+if [ "$n" = 0 ]; then echo "loop: $SPEC has no stages" >&2; exit 1; fi
+for ((i = 0; i < n; i++)); do
+  # A repeated id would make the `back` jump land on the wrong stage.
+  if [ "$(printf '%s\n' "${IDS[@]}" | grep -cxF "${IDS[i]}")" != 1 ]; then
+    echo "loop: stage id ${IDS[i]} is not unique in $SPEC" >&2
+    exit 1
+  fi
+  if [ ! -f "$R/factory/templates/${ROLES[i]}.md" ]; then
+    echo "loop: no role template $R/factory/templates/${ROLES[i]}.md" >&2
+    exit 1
+  fi
+done
+
+# Resume where the last run stopped. `fix` lists the stages that owe a review.json to fix.
+declare -A FIX=()
+idx=0
+round=1
+if [ -f state.json ]; then
+  prev=$(jq -r '.stage // ""' state.json)
+  round=$(jq -r '.round // 1' state.json)
+  for ((i = 0; i < n; i++)); do
+    if [ "${IDS[i]}" = "$prev" ]; then idx=$i; fi
+  done
+  mapfile -t fixed < <(jq -r '.fix[]?' state.json)
+  for s in "${fixed[@]}"; do FIX[$s]=1; done
+  echo "resuming $NAME at ${IDS[idx]} r$round" >&2
+fi
+
+while [ "$idx" -lt "$n" ]; do
+  id=${IDS[idx]}
+  ins=${INS[idx]}
+  if [ "${FIX[$id]:-0}" = 1 ]; then ins=$ins,review.json; fi
+  prompt="${PROMPTS[idx]} $(printf '%s' "$ins" | tr ',' ' ')"
+  fixjson=[]
+  if [ "${#FIX[@]}" -gt 0 ]; then
+    fixjson=$(printf '%s\n' "${!FIX[@]}" | jq -Rsc 'split("\n") | map(select(. != ""))')
+  fi
+  printf '{"stage":"%s","round":%s,"fix":%s}\n' "$id" "$round" "$fixjson" >state.json
+
+  # One fresh agent for this stage; the JSON event stream is the audit trail.
+  code=0
+  "$PI_CMD" --mode json -p --model "$MODEL" --thinking "${THINKS[idx]}" \
+    --tools "${TLS[idx]}" --append-system-prompt "$R/factory/templates/${ROLES[idx]}.md" \
+    "$prompt" >"$id.r$round.log" 2>&1 || code=$?
+  out=${OUTS[idx]}
+  if [ "$code" != 0 ]; then
+    printf '{"stage":"%s","round":%s,"score":null,"exit":%s}\n' "$id" "$round" "$code" >>"$LEDGER"
+    exit "$code"
+  fi
+  if [ ! -s "$out" ]; then echo "loop: $id r$round wrote no $out" >&2; exit 3; fi
+
+  # Gate: the review must be JSON with a pass|revise verdict; a revise sends the loop back.
+  verdict=
+  score=null
+  back=
+  maxr=0
+  if [ -n "${GB[idx]}" ]; then
+    back=${GB[idx]}
+    maxr=${GM[idx]}
+    if ! jq -e '.verdict=="pass" or .verdict=="revise"' "$out" >/dev/null 2>&1; then
+      printf '{"stage":"%s","round":%s,"score":null,"exit":3}\n' "$id" "$round" >>"$LEDGER"
+      echo "loop: $id r$round wrote no valid $out" >&2
+      exit 3
+    fi
+    verdict=$(jq -r '.verdict' "$out")
+    score=$(jq -c 'if .score == null then null else .score end' "$out")
+  fi
+  printf '{"stage":"%s","round":%s,"score":%s,"exit":0}\n' "$id" "$round" "$score" >>"$LEDGER"
+
+  if [ -z "$back" ]; then
+    idx=$((idx + 1))
+    continue
+  fi
+  # A passing gate goes on to the next stage; a revise goes back to the stage that owes a fix.
+  if [ "$verdict" = pass ]; then
+    idx=$((idx + 1))
+    continue
+  fi
+
+  if [ "$round" -ge "$maxr" ]; then
+    echo "loop: $back r$round needs another round, but max_rounds $maxr is reached" >&2
+    exit 2
+  fi
+  # The scores of the review rounds are the score-bearing ledger lines, newest last.
+  stall=$(jq -s -r '([.[] | select(.score != null)] |
+    length >= 3 and .[-1].score <= .[-2].score and .[-2].score <= .[-3].score) |
+    if . then 1 else 0 end' "$LEDGER")
+  if [ "$stall" = 1 ]; then
+    echo "loop: $back did not improve the score in 2 rounds" >&2
+    exit 2
+  fi
+
+  for ((i = 0; i < n; i++)); do
+    if [ "${IDS[i]}" = "$back" ]; then idx=$i; fi
+  done
+  FIX[$back]=1
+  round=$((round + 1))
+done
+
+# Every stage ran; drop the state so a rerun with this NAME starts a fresh loop.
+rm -f state.json
+exit 0
+

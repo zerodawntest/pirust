@@ -1,0 +1,32 @@
+{
+  "stages": [
+    {
+      "id": "write",
+      "role": "coder",
+      "thinking": "low",
+      "tools": "read,write,bash",
+      "inputs": ["goal.md"],
+      "output": "draft.md",
+      "prompt": "Answer the goal in one paragraph. Write your answer to draft.md. Inputs:"
+    },
+    {
+      "id": "review",
+      "role": "reviewer",
+      "thinking": "high",
+      "tools": "read",
+      "inputs": ["draft.md"],
+      "output": "review.json",
+      "gate": {"back": "write", "max_rounds": 2},
+      "prompt": "Review the draft against the goal. Write your verdict to review.json as {\"verdict\":\"pass\"|\"revise\",\"score\":0.4}. Inputs:"
+    },
+    {
+      "id": "done",
+      "role": "planner",
+      "thinking": "off",
+      "tools": "read,write",
+      "inputs": ["draft.md", "review.json"],
+      "output": "final.md",
+      "prompt": "Copy the reviewed answer as the final answer. Write it to final.md. Inputs:"
+    }
+  ]
+}
