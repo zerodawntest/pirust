@@ -1,0 +1,4 @@
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}
+{"type":"message","message":{"role":"assistant","model":"qwen38-flash-next","content":[{"type":"toolCall","name":"bash"}],"usage":{"input":1200,"output":300,"cacheRead":30000,"cacheWrite":0,"cost":{"total":0}}}}
+{"type":"message","message":{"role":"toolResult","toolName":"bash","isError":true,"content":[{"type":"text","text":"boom"}]}}
+{"type":"message","message":{"role":"assistant","model":"qwen38-flash-next","content":[{"type":"toolCall","name":"read"},{"type":"text","text":"done"}],"usage":{"input":1200,"output":300,"cacheRead":30000,"cacheWrite":0,"cost":{"total":0}}}}

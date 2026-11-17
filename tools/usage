@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# usage SESSION.jsonl  Sum per-step token usage from a pi session file and record one
+# aggregate line in $HOME/.pi/pirust-usage.jsonl (replacing any earlier line for the
+# same session file name). See ticket #135.
+set -euo pipefail
+
+if [ "$#" -ne 1 ]; then
+	echo "usage: usage <session.jsonl>" >&2
+	exit 1
+fi
+session_file=$1
+if [ ! -f "$session_file" ]; then
+	echo "usage: not a file: $session_file" >&2
+	exit 1
+fi
+
+session=$(basename "$session_file")
+dir=$(dirname "$session_file")
+
+# Ticket number lives in the worktree dir name, shaped "...-wt-<N>--...". null if absent.
+ticket=$(printf '%s' "$dir" | grep -oE '[-]wt-[0-9]+--' | grep -oE '[0-9]+' | head -1 || true)
+[ -n "$ticket" ] || ticket=null
+
+ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# One assistant line = one agent step. Sum its usage; count turns, tool calls, tool errors.
+line=$(jq -c -s \
+	--arg session "$session" \
+	--argjson ticket "$ticket" \
+	--arg ts "$ts" \
+	'
+	[ .[] | select(.type == "message" and .message.role == "assistant") ] as $a
+	| {
+		session: $session,
+		ticket: $ticket,
+		model: ($a[0].message.model // null),
+		turns: ($a | length),
+		toolCalls: ([ $a[] | .message.content[]? | select(.type == "toolCall") ] | length),
+		toolErrors: ([ .[] | select(.type == "message" and .message.role == "toolResult" and .message.isError == true) ] | length),
+		input: ([ $a[].message.usage.input // 0 ] | add // 0),
+		output: ([ $a[].message.usage.output // 0 ] | add // 0),
+		cacheRead: ([ $a[].message.usage.cacheRead // 0 ] | add // 0),
+		cacheWrite: ([ $a[].message.usage.cacheWrite // 0 ] | add // 0),
+		cost: ([ $a[].message.usage.cost.total // 0 ] | add // 0),
+		ts: $ts
+	}
+	' "$session_file")
+
+out="$HOME/.pi/pirust-usage.jsonl"
+mkdir -p "$HOME/.pi"
+
+# Replace any existing line for this session: keep the others, append the new one.
+tmp=$(mktemp)
+if [ -f "$out" ]; then
+	jq -c --arg session "$session" 'select(.session != $session)' "$out" > "$tmp"
+fi
+printf '%s\n' "$line" >> "$tmp"
+mv "$tmp" "$out"
