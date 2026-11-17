@@ -1,6 +1,11 @@
 # pirust — context for every agent
 
-Rust port of pi (the coding agent `pi-coding-agent` and its SDK) and of `pi-durable-cloudflare`, as close to a clone as we can get.
+# Build a agent harness in rust based on PI
+
+We are going to try to refactor PI into Rust.
+Lets try to keep it as close to PI as possible, all functions.
+
+Rust port of pi (the coding agent `pi-coding-agent` and its SDK and of `pi-durable-cloudflare`, as close to a clone as we can get.
 You will meet bugs, mostly performance (handlers running six times, foreground waits, one MCP per session): the improvement wins over the clone.
 The durable part matters as much as the plain port. Keep it close to pi, function for function.
 

@@ -23,11 +23,15 @@ GitHub access: GitHub App `pirust-bot` (App ID 5790484), installed on `zerodawnt
 - Next work, in order: act on `[gh]` events → unblock agents → Ready tickets by priority → refine Backlog → draft pending ADR/RFC → improve tooling/checklist. Max 3 tickets In progress per agent pool.
 - The final PR into `main` is Patrick's to review/merge. Everything else (integration branch, agent PRs) the team handles.
 - The orchestrator is CEO only: talks to Patrick, decides escalations and high-impact tickets. It does not write code, create routine tickets, launch agents or merge: the dispatcher (code) and planner/reviewer agents do.
+- The orchestrator does not write code; agents do.
 - Never block in the foreground (no `hc wait`, sleep, watch, builds, clones, batch API/ticket loops, agent launches). Anything > ~5s runs via `hc run --bg`. Run in `hc run --bg`; results arrive as messages.
+- Never block in the foreground (no `hc wait`, sleep, watch, builds). Run in `hc run --bg`; results arrive as messages.
 - Never poll and never use `hc send` for notifications. Liaison = `.pi/extensions/gh-events.ts`: routine events (pushes, board moves, agent done) go only to `~/.pi/pirust-digest.log`; it wakes the orchestrator (`[gh] N event(s)`) only for Patrick's comments/reviews/new or assigned tickets, CI failures, blocked/failed agents. Read the digest only when needed.
 - Patrick assigns work to the orchestrator by assigning `pirust-bot` on a ticket (arrives as `[gh] issue #N assigned pirust-bot[bot]`). Pick it up first.
 - Stay active: after handling an event, continue with Next work in the same turn. Never end a turn with only an acknowledgement.
 - Never call `reload_runtime` from a lead session (#83): run `tools/extcheck` on the edited extension, then Patrick restarts this session; the change applies then. A mid-session reload breaks the prompt cache.
+- After editing `.pi/extensions/*`, call the `reload_runtime` tool yourself; never ask Patrick to reload.
+  Superseded by the line above (#83): a lead never calls `reload_runtime`; Patrick restarts the session.
 - No claim without evidence: read the tool's own skill/help (`<tool> --skill`, `--help`, docs) fully before acting, test the change, and cite the check (command + result) when reporting it done. Herdr: `herdr-app ls` / `herdr-app shot` prove what is shown.
 - Merges: fast-forward only to keep signatures (GitHub rebase-merge strips them).
 
@@ -38,6 +42,8 @@ GitHub access: GitHub App `pirust-bot` (App ID 5790484), installed on `zerodawnt
 - NixOS with impermanence: `/` is tmpfs, `/tmp` and `~/.cache` are wiped on reboot. Persistent: `~/private` (this repo), `~/Documents` (keys), `~/.pig`, `~/.config/herdr-*`, `~/.local/state/herdr-core`, `~/.ssh`, `~/.config/gh`. Anything that must survive goes in the repo, `~/.pig` or a persisted path, never `/tmp`.
 - Process runner: herdr. `herdr-core` (`hc`) runs persistent terminals; `herdr-app` is the window only. Read `hc --skill` before starting agents/services.
   - Agents: `hc run --bg --name <n> --cwd <worktree> tools/sandbox . pi --model ibm-next/qwen38-flash-next --thinking low "<task>"` (everyone runs pi 1.5.1; ceo-guard blocks the pig binary), interactive (never `-p`). Task goes in the `run`, not a later send.
+  - Agents: `hc run --bg --name <n> --cwd <worktree> pig --model ibm-next/qwen38-flash-next --thinking low "<task>"`, interactive (never `-p`). Task goes in the `run`, not a later send.
+  Superseded by the line above: agents run `pi`, not `pig` (the launch line is the one above; the `pig` line is kept verbatim for the record).
   - Completion: rely on hc's automatic finish notification to the parent (do not pass `--no-notify`). Never `hc wait` in the foreground, never sleep/poll.
   - Agents write their result to `HANDOFF.md` (≤3 lines) in the worktree; `tools/wt` posts it to the ticket. Agents do not message the orchestrator.
   - Slow work (builds, tests): `hc run --bg --rm --name <n> ...`; finish notification arrives as a message. CI results arrive as `[gh]` events.
@@ -88,6 +94,8 @@ Docs:
 - We will use a kanban flow. Where every ticket start's at backlog, it will be refined, investigated, put on ready.
 - In progress means a agent is working on it, it will claim it with his session ID.
 - Only high-impact tickets (changing how things work: architecture, process, permissions, models) need Patrick review before Ready. All other tickets go to Ready without asking. Patrick reviews the integration → main PR.
+- Before it goes to ready -> My account ( Patrick-Kappen ) should be tagged, and must review. The same goes after integration, i have to review the PR.
+  Superseded by the line above: only high-impact tickets need Patrick review before Ready.
 - Agent's should be able to start straight from the ticket without instructions.
 - All communication is handled trough tickets. Unless i'm avaiable at chat.
 - All tickets should always be updated every step of the way ( preferably automatically as well )
@@ -100,6 +108,8 @@ Docs:
 - This means agent's except your managers should message you directly, put something like a liason in between so you will not be troubled by a message every second.
 
 You can setup a team as you like but think about agent profiles/agent skills/tools/extensions/other tools, like linters, testkits, writing different tools. All information can be found in the documentation from pi.
+
+You can setup a team as you like but think about agent profiles/agent skills/tools/extensions/other tools, like linters, testkits, writing different tools. All information can be found in the documentation from pi and pig.
 
 What you will need at least :
 

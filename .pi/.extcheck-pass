@@ -1,4 +1,5 @@
-2d381a199d90bec7f44cd0169b40f161ecd6b3db94799414fd7749a706f658f7  .pi/extensions/agent-tools.ts
+f7e1f67e9bf11c7b73cd95b13c95062700aab7b99d2773608b43d0ae484d0d43  .pi/extensions/agent-guard.ts
+b30f0b7db8aaddba02bdb2d08d24490d246d4484b5c0724080d934caf1da5e86  .pi/extensions/agent-tools.ts
 bdc803daf362585df6c4c8c5de25018b2844f981a714a02788a67f0b609b3e01  .pi/extensions/ceo-guard.ts
-a180ba97a5108117c07a0c798e5056e4593962b765ed244ff0f42b6164c35395  .pi/extensions/gh-events.ts
+e438f672edda6962142d218b1204e730a3bf276c05777ca4420e1b3b2c9d877d  .pi/extensions/gh-events.ts
 20646a99c8c9a69c36b9de76d78fe478705c8711478f0b2823b4722ba18b2e14  .pi/extensions/keepalive.ts
