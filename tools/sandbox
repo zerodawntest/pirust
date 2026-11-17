@@ -7,8 +7,19 @@ W=$(readlink -f "$1"); shift
 # Agent tools (handoff, #73): pi loads .ts extensions from <cwd>/.pi/extensions and the
 # worktree is the only writable place in the sandbox, so install them into the worktree.
 # Tests stay out: pi would load them as extensions and node:test would run them there.
+# These copies are untracked files in the worktree; the finish step runs `git add -A`, so
+# list each one in the worktree's exclude file (git rev-parse --git-path resolves to the
+# common git dir) to keep them out of the pull request. #159.
 mkdir -p "$W/.pi/extensions"
-for f in "$R"/factory/extensions/*.ts; do [[ "$f" == *.test.ts ]] || cp -f "$f" "$W/.pi/extensions/"; done
+EXCLUDE=$(git -C "$W" rev-parse --git-path info/exclude)
+[[ "$EXCLUDE" = /* ]] || EXCLUDE="$W/$EXCLUDE"
+for f in "$R"/factory/extensions/*.ts; do
+  [[ "$f" == *.test.ts ]] && continue
+  cp -f "$f" "$W/.pi/extensions/"
+  line="/.pi/extensions/$(basename "$f")"
+  mkdir -p "$(dirname "$EXCLUDE")"
+  grep -qxF "$line" "$EXCLUDE" 2>/dev/null || printf '%s\n' "$line" >> "$EXCLUDE"
+done
 HCB=$(readlink -f "$(command -v hc)" 2>/dev/null || true)
 H=$HOME; S=$H/.pig/sandbox; A=$S/agent
 mkdir -p "$S/cargo" "$A/sessions"; touch "$A/models.json"
