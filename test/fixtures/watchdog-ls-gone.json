@@ -1,0 +1,4 @@
+[
+  {"address": "s9", "name": "some-old-closed", "state": "exited"},
+  {"address": "s2", "name": "pirust-1", "state": "running"}
+]

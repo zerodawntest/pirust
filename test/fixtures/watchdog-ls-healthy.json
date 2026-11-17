@@ -1,0 +1,5 @@
+[
+  {"address": "t1nm", "name": "t1nm", "state": "running"},
+  {"address": "s1", "name": "pirust-driver", "state": "running"},
+  {"address": "s2", "name": "pirust-1", "state": "running"}
+]

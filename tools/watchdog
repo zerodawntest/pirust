@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # watchdog — the second line of defence for the pirust factory (ticket #91), next to keepalive (#86).
-# Checks the facts in factory/runtime.md with files and the process table only, and fixes them with
-# plain commands: no pi, no extension, no LLM, no network. One digest line per action (AGENTS.md:
-# the digest is the log, a wake-up is a message; nobody waits in the foreground).
+# Checks the facts in factory/runtime.md with files, the process table and `hc ls` only, and fixes
+# them with plain commands: no pi, no extension, no LLM, no network. One digest line per action
+# (AGENTS.md: the digest is the log, a wake-up is a message; nobody waits in the foreground).
 #
 #   tools/watchdog              check and act — what the systemd user timer runs every 2 min
 #   tools/watchdog install      (re-)create that timer: systemd-run --user --on-calendar (no NixOS rebuild)
@@ -10,15 +10,16 @@
 #
 # 1 t1nm (the lead: the chat with Patrick, and the host of the liaison) is gone: a herdr terminal
 #   shows the alert, and the digest gets an ESCALATE line. Only Patrick restarts the lead.
-# 2 the driver (pirust-driver) is gone: relaunch it with the line factory/driver.md prescribes
-#   (pi, Opus 5.5 high, tools/sandbox, PIRUST_ROLE=driver, terminal pirust-driver) plus --no-parent.
+# 2 the driver (pirust-driver) is gone: relaunch it with the Restart line of factory/driver.md, as-is
+#   (pi in tools/sandbox, anthropic/claude-opus-5.5 --thinking high, PIRUST_ROLE=driver, --no-session).
 # 3 the lead is idle 2 min after a compaction: send it "continue" from factory/STATE.md.
 # 4 the driver is idle 15 min while the digest grew since: send it "continue" from factory/driver.md.
 # 5 the gh webhook forwarder, or the liaison host, is not running: digest ESCALATE.
 # 6 the relaunches use --outlive-parent, so neither the driver nor an agent dies with t1nm.
 #
 # The state files (the driver's session file, the alert markers) go to a persisted directory:
-# /tmp and ~/.cache are wiped on reboot, ~/.pi is not (factory/runtime.md).
+# /tmp and ~/.cache are wiped on reboot, ~/.pi is not (factory/runtime.md). A --dry-run keeps its
+# writes out of the tracked fixtures by pointing the state and digest files at a throwaway dir.
 
 set -uo pipefail
 # A failed action is reported and the next check runs: one broken piece must not stop the watchdog.
@@ -52,12 +53,22 @@ DRIVER_SESS_DIR=${PIRUST_DRIVER_SESS_DIR:-$HOME/.pi/agent/sessions/--${R//\//-}-
 DIGEST=${PIRUST_DIGEST:-$HOME/.pi/pirust-digest.log}
 STATE=${PIRUST_STATE:-$HOME/.pi/watchdog}
 PROCS=${PIRUST_PROCS:-}
+LS_JSON=${PIRUST_LS_JSON:-}
 DRIVER_SESS=${PIRUST_DRIVER_SESSION:-}
 LEAD=t1nm
 DRIVER=pirust-driver
 OPUS=${PIRUST_LEAD_MODEL:-anthropic/claude-opus-5.5} # both leads: Opus 5.5 high (factory/design.md)
 HC=$(command -v hc 2>/dev/null || true)
 [ -x "$HC" ] || HC=
+
+# A dry run must not write into the tracked fixtures (test/fixtures/watchdog-state): its state
+# writes go to a throwaway dir, so the next --dry-run starts clean and the diff stays clean. The
+# digest file is read (case 4) and written (run mode); in dry mode the writes are prints, so the
+# tracked digest fixture stays as it is.
+if [ "$MODE" = dry ]; then
+  state_scratch=$(mktemp -d "${TMPDIR:-/tmp}/watchdog-dry.XXXXXX")
+  STATE=$state_scratch
+fi
 
 state_dir=$STATE
 mkdir -p "$state_dir" || printf 'watchdog: cannot write %s\n' "$state_dir" >&2
@@ -133,13 +144,17 @@ if [ "$MODE" = install ]; then
 fi
 
 # --- 1. t1nm (the lead) is gone: only Patrick restarts it, so alert him.
-# Both leads run pi on Opus 5.5 high; the driver is the one that loads ceo-guard.ts and
-# keepalive.ts with -e (factory/runtime.md), so the Opus-high lines that are not the driver's are
-# the lead's: it loads .pi/extensions/* from its cwd, so it has no -e at all.
-n_opus=$(n_running '--model [^ ]+ --thinking high')
-n_driver=$(n_running '--model [^ ]+ --thinking high' '-e [^ ]*\.pi/extensions/keepalive\.ts')
-n_lead=$((n_opus - n_driver))
-if [ "$n_lead" -lt 1 ]; then
+# Detect both leads by their terminal registrations, not by a model regex: the driver's real launch
+# line is `pi --model anthropic/claude-opus-5-5:high -n pirust-driver ...` (the model carries the
+# `:high` suffix, so a `--model X --thinking high` regex misses it). `hc ls --json` lists a live
+# terminal per record: the lead is addressed `t1nm`, the driver is named `pirust-driver`. A
+# sandbox that strips `hc` (the coders run in tools/sandbox) reads a fixture, so cases 1-5 stay
+# verifiable offline.
+if [ -n "$LS_JSON" ]; then ls=$(cat "$LS_JSON" 2>/dev/null); else ls=$(hc ls --json 2>/dev/null); fi
+n_lead=$(printf '%s\n' "$ls" | jq -r '[if type=="array" then .[] else (.terminals // [])[] end | select((.address? // "") == "t1nm")] | length')
+n_driver=$(printf '%s\n' "$ls" | jq -r '[if type=="array" then .[] else (.terminals // [])[] end | select((.name? // "") == "pirust-driver")] | length')
+
+if [ "${n_lead:-0}" -lt 1 ]; then
   # An interactive terminal, so Patrick sees it: t1nm is the terminal he talks through, so it is
   # gone as a channel too. The marker caps it at one per hour; a new launch clears it.
   marker=$STATE/alert-t1nm-$(date -u +%Y%m%d%H)
@@ -157,11 +172,12 @@ if [ "$n_lead" -lt 1 ]; then
 fi
 
 # --- 2. The driver is gone: relaunch it, so the factory keeps driving without a chat session.
-if [ "$n_driver" -lt 1 ]; then
-  driver_prompt="Read $R/factory/driver.md and drive the factory; resume from $R/factory/STATE.md. Relaunched by tools/watchdog because $LEAD is not there."
-  # The launch line is the Restart block of $R/factory/driver.md: pi in tools/sandbox, Opus 5.5
-  # high, the two -e paths relative (the sandbox binds only $R, and pi resolves -e against cwd).
-  # --no-parent --outlive-parent: nothing of this may die with t1nm (case 6).
+if [ "${n_driver:-0}" -lt 1 ]; then
+  driver_prompt="Read $R/factory/STATE.md and $R/factory/driver.md, then drive the factory."
+  # The launch line is the Restart block of $R/factory/driver.md, as-is: pi in tools/sandbox,
+  # anthropic/claude-opus-5.5 --thinking high, PIRUST_ROLE=driver, --no-session, the two -e paths
+  # relative (the sandbox binds only $R, and pi resolves -e against the cwd). The relaunch adds
+  # --no-parent --outlive-parent, so nothing here dies with t1nm (case 6).
   if [ "$MODE" = dry ] || [ -n "$HC" ]; then
     run "$HC" run --bg --no-notify --no-parent --outlive-parent --name "$DRIVER" \
       --label project=pirust --label role=driver --cwd "$R" \
@@ -180,7 +196,7 @@ fi
 # continues it, so wake it. The driver's own files are in $DRIVER_SESS_DIR, so the newest file
 # here is the lead's.
 lead_sess=$(newest "$SESS"/*.jsonl)
-if [ -n "$lead_sess" ] && [ "$n_lead" -ge 1 ]; then
+if [ -n "$lead_sess" ] && [ "${n_lead:-0}" -ge 1 ]; then
   idle=$(( ($(date -u +%s) - $(last_ts "$lead_sess")) / 60 ))
   if [ "$idle" -ge 2 ] && tail -n 1 "$lead_sess" | grep -q '"type":"compaction"'; then
     size=$(wc -c <"$lead_sess")
@@ -197,7 +213,7 @@ fi
 driver_sess=${DRIVER_SESS:-}
 [ -n "$driver_sess" ] || driver_sess=$(newest "$DRIVER_SESS_DIR"/*.jsonl)
 [ -n "$driver_sess" ] && [ -f "$driver_sess" ] || driver_sess=$lead_sess
-if [ -n "$driver_sess" ] && [ "$n_driver" -ge 1 ]; then
+if [ -n "$driver_sess" ] && [ "${n_driver:-0}" -ge 1 ]; then
   sess_ts=$(last_ts "$driver_sess")
   # No session file (relaunch uses --no-session): the relaunch stamp is its last session write.
   if [ "$sess_ts" = 0 ] && [ -f "$STATE/driver-launch" ]; then sess_ts=$(date -r "$STATE/driver-launch" +%s); fi
@@ -217,10 +233,10 @@ fi
 
 # --- 5. The liaison, or the gh webhook forwarder, is not running: events would reach nobody.
 # The liaison runs in the lead (case 1 covers restarting it), the forwarders are plain gh processes.
-if [ "$n_lead" -lt 1 ]; then
+if [ "${n_lead:-0}" -lt 1 ]; then
   digest "ESCALATE liaison not running: no gh-events host, GitHub events reach nobody (restart $LEAD)"
 fi
 n_forward=$(n_running '(^|/)gh webhook forward')
-if [ "$n_forward" -lt 2 ]; then
+if [ "${n_forward:-0}" -lt 2 ]; then
   digest "ESCALATE gh webhook forward not running ($n_forward/2): GitHub events are not pushed; relaunch $LEAD, then $D/agent for the queue"
 fi
