@@ -1,4 +1,5 @@
 # STATE (driver, 2026-11-17 06:50)
+- FREEZE (CEO 07:45, Patrick): no new tickets, loops, watchers or process changes. Stopped pirust-loop-p0, pirust-tk-ver. Asked Patrick: (a) stop stopgap+driver launches too? (b) step 1 = integration full suite -> green written PR to main, only the tickets for that? Wait for his answer; do not resume the feedback/port plan below. Seen: #171/#174 relaunched and reported 'done' 1s later on the old rejected PR (nobody checked). ceo-flow.ts stays inactive unless Patrick wants it. Open PRs 157 175 185 186.
 - Mode: verify first. Land = clone ~/.pig/cache/merge-N, cred helper ("" then add tools/gh-app-token; never --replace-all), rebase -S, verify, push t/N -f (retry: "remote rejected (failed)" is transient), push t/N:integration, rebase main --autostash. Conflict -> `tools/wt refresh N`. One digest line per merge/reject.
 - Guard: commands must START with `hc run --bg`; bodies via heredoc in `bash -c "$(cat <<'SCRIPT' ...)"`.
 - #139 landed: agent prompt has NO comments, and `ticket set -s Ready` lints (Files: first line, <=3 paths, `- Verify:` under `## Done when`, <=45 lines, no factory/*.md, no "skill"). Rework notes go INTO the body, in template form.
@@ -12,7 +13,9 @@
 - Board cleanup (CEO) done: #118-125 Done; In progress 65 9 17 32 37 43 74 -> Backlog; PRs 129 95 82 71 70 62 51 closed, tickets -> Backlog.
 - Queue: 171 (loop-model). Watcher hc pirust-loop-p0 (~/.pig/loop-p0.out): waits for (#171) in integration + open "phase 0" issue (CEO body factory/tk-p0.md), then runs loop p0.
 - Loop lifecycle (#130 goal) exited 3 (researcher overflowed ctx); not rerun.
-- #172 (lint only Task/Bug) PR 173 conflicted with #81 -> refreshed (markers tools/ticket), Ready, queued before Features can be created.
+- #172 landed aedcc06: Features/Epics/needs:patrick no longer linted -> CEO can create the phase Features.
+- #171 PR 175 rejected: emit_ledger `jq -s` dies on pi `Warning:` lines in real logs (set -u abort). Rework in body. Queue 171 174 176. #158 closed dup of #91.
+- Lint false positive: the word "skill" blocks `/skill:` commands in bodies (#158).
 - Waiting on Patrick: #4 #5 #6 #28 #32.
 - CEO 07:00: codex models allowed (factory/process-review.md). Port plan factory/port-plan.md. Lint blocks Feature creation -> P0 bug queued; after it lands: create 7 phase Features under #36 (P0 body factory/tk-p0.md), then milestone loop on phase 0 (needs #171 loop-model). Loop run 1 failed: qwen researcher overflowed 160k ctx.
 - CEO 07:10: factory/feedback.md has priority over port scale-out. Build order 1-6 there; step 1 ticket queued (digest "feedback step1").
