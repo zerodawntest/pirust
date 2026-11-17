@@ -26,6 +26,9 @@ const DEBOUNCE_MS = 10_000;
 const REPO_DIR = `${homedir()}/private/pirust`;
 const DIGEST = `${homedir()}/.pi/pirust-digest.log`;
 const digest = (s: string) => { try { appendFileSync(DIGEST, `${new Date().toISOString()} ${s}\n`); } catch {} };
+// Unmatched events (dispatch, board moves, ...) are one line in the driver queue: the driver reads it,
+// the chat is not the work log (#107). `event-route` writes the file, so no callback work here.
+const route = (s: string) => { execFile(`${REPO_DIR}/tools/event-route`, ["other", s], { env: process.env }, () => {}); };
 const escalates = (type: string, p: any) =>
 	p.sender?.type === "User" &&
 	(["issue_comment", "pull_request_review", "pull_request_review_comment"].includes(type) ||
@@ -94,7 +97,6 @@ export default function (pi: ExtensionAPI) {
 	const termOf = (n: string) => [...tickets].find(([, v]) => v === n)?.[0];
 	const kill = (term: string | undefined, why: string) => {
 		if (!term || handled.has(term)) return;
-		queue.push(`agent #${tickets.get(term)} killed: ${why}`);
 		finishAgent(term, `killed (${why})`);
 	};
 	const onSession = (file: string) => {
@@ -131,22 +133,22 @@ export default function (pi: ExtensionAPI) {
 		execFile(`${REPO_DIR}/tools/next-ready`, (e, out) => {
 			const n = String(out).trim();
 			if (e || !n) return digest(`dispatch: no Ready ticket${e ? ` (error ${String(e).slice(0, 80)})` : ""}`);
-			execFile(`${REPO_DIR}/tools/agent`, [n], { env: { ...process.env, PIRUST_PARENT: process.env.HC_TERMINAL_ID ?? "" } }, (e2) => (e2 ? (queue.push(`dispatch: launching #${n} failed`), flush()) : digest(`dispatch: launched #${n}`)));
+			execFile(`${REPO_DIR}/tools/agent`, [n], { env: { ...process.env, PIRUST_PARENT: process.env.HC_TERMINAL_ID ?? "" } }, (e2) => (e2 ? route(`dispatch: launching #${n} failed`) : digest(`dispatch: launched #${n}`)));
 		});
+	// An agent event is a ticket action, run by code (ticket #107): `tools/event-route` posts the handoff
+	// (or the forced handoff) on the ticket and writes one digest line. Nothing here reaches the chat,
+	// so the CEO is never woken for an agent - `grep -c "agent #"` on a t1nm wake stays 0.
 	const finishAgent = (term: string, why: string) => {
 		const n = tickets.get(term);
 		if (!n || handled.has(term)) return;
 		handled.add(term);
-		execFile(`${REPO_DIR}/tools/wt`, ["finish", n], { env: process.env }, (e, out, err) => {
-			const msg = `agent #${n} ${why}: ${e ? `wt finish failed: ${String(err).trim().slice(-200)}` : out.trim()}`;
-			execFile("hc", ["kill", term], () => execFile("hc", ["rm", term], () => {}));
-			clearTimeout(watch.get(term));
-			launchNext();
-			if (!e && why === "done") return digest(msg);
-			queue.push(msg);
-			clearTimeout(timer);
-			timer = setTimeout(flush, 1000);
+		const args = /^killed/.test(why) ? ["killed", n, why.replace(/^killed \((.*)\)$/, "$1")] : ["agent-done", n];
+		execFile(`${REPO_DIR}/tools/event-route`, args, { env: process.env }, (e, out, err) => {
+			digest(`agent #${n} ${why}: ${e ? `${String(err).trim().slice(-200) || "event-route failed"}` : out.trim()}`);
 		});
+		execFile("hc", ["kill", term], () => execFile("hc", ["rm", term], () => {}));
+		clearTimeout(watch.get(term));
+		launchNext();
 	};
 	const watchAgents = () => {
 		const k = spawn("hc", ["events", "--json", "--label", "project=pirust"], { stdio: ["ignore", "pipe", "pipe"] });
@@ -220,8 +222,20 @@ export default function (pi: ExtensionAPI) {
 					const line = await summarize(String(req.headers["x-github-event"] ?? ""), p);
 					if (!line) return;
 					const type = String(req.headers["x-github-event"] ?? "");
-					const bad = (type === "check_suite" || type === "workflow_run");
-					if (!bad && !escalates(type, p)) return digest(line);
+					// CI failure on a PR is a ticket action, not a chat message (#107): the ticket the PR
+					// body names gets the failing job + log tail and goes Ready.
+					if (type === "check_suite" || type === "workflow_run") {
+						const pr = p.check_suite?.pull_requests?.[0]?.number ?? p.workflow_run?.pull_requests?.[0]?.number;
+						const job = p.check_suite?.name ?? p.workflow_run?.name;
+						execFile(`${REPO_DIR}/tools/event-route`, pr ? ["ci-failure", String(pr), String(job ?? "")] : ["other", line], { env: process.env }, () => {});
+						return digest(line);
+					}
+					// Only Patrick's comments/assignments wake the CEO; everything else is a ticket
+					// comment by a script, or one line in the driver queue for the driver to pick up.
+					if (!escalates(type, p)) {
+						execFile(`${REPO_DIR}/tools/event-route`, ["other", line], { env: process.env }, () => {});
+						return digest(line);
+					}
 					if (queue.includes(line)) return;
 					queue.push(line);
 					clearTimeout(timer);

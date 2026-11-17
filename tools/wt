@@ -4,7 +4,7 @@
 #                        as uncommitted conflict markers in the worktree, ticket back to Ready
 # wt finish NUM          HANDOFF.md -> ticket comment; signed commit, push, PR to integration, In review
 # wt rm NUM              remove worktree + local branch
-# Agents never run these; the orchestrator/extension does.
+# Agents never run these; the orchestrator/extension does (tools/event-route for agent events).
 #
 # A rebase conflict is not a human job (#99): agents have no git, so `finish` on a
 # conflict calls `refresh` instead of failing. `refresh` leaves the conflicts as

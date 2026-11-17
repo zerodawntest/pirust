@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# event-route EVENT  Deterministic ticket actions for fleet events: no LLM, and never a chat wake (#107).
+#   event-route agent-done NUM [PR]         agent finished with a PR -> review queue, ticket In review
+#   event-route wt-conflict NUM [FILES]     wt finish conflict -> wt refresh, ticket Ready, comment files
+#   event-route killed NUM REASON           killed (budget|loop|stalled): forced handoff; 3rd -> Blocked + needs:split
+#   event-route ci-failure PR [JOB [LOG]]   CI failure -> ticket comment (failing job + log tail), ticket Ready
+#   event-route other [TEXT]                unmatched: one line to $PIRUST_STATE_DIR/driver-queue
+# Every action is a ticket comment / board change plus one digest line: the CEO chat is not the work
+# log, so no event here sends a message to t1nm. WT/TICKET/GH name the helpers so a test can run
+# this offline with shims (see test/event-route.test.ts).
+set -euo pipefail
+D=$(dirname "$(readlink -f "$0")")
+WT=${WT:-$D/wt}
+TICKET=${TICKET:-$D/ticket}
+GH=${GH:-$D/gh-bot}
+S=${PIRUST_STATE_DIR:-${HOME}/.pi}
+REPO=zerodawntest/pirust
+usage() { printf '%s\n' "$(sed -n '2,10p' "$0")"; exit 1; }
+mkdir -p "$S"
+
+say() { printf '%s\n' "$*"; }
+digest() { printf '%s %s\n' "$(date -Is)" "$*" >>"$S/pirust-digest.log"; }
+comment() { "$GH" issue comment "$1" -b "$2" >/dev/null; }
+
+# The agent is done: `wt finish` posts its HANDOFF.md, pushes the branch, opens the PR and sets the
+# ticket In review. A rebase conflict is routed here too, so one entry point covers both events.
+do_agent_done() {
+	n=$1; pr=${2:-}
+	out=$("$WT" finish "$n" 2>&1) || {
+		files=$(sed -nE 's/^rebase-conflict (.*)$/\1/p' <<<"$out")
+		if [ -n "$files" ]; then do_wt_conflict "$n" "$files"; return 0; fi
+		printf 'agent #%s: wt finish failed: %s\n' "$n" "$(tr '\n' ' ' <<<"$out" | tail -c 200)" >>"$S/driver-queue"
+		return 0
+	}
+	pr=$(sed -nE 's/^pr=([0-9]+)$/\1/p' <<<"$out")
+	if [ -n "$pr" ]; then
+		printf 'PR #%s ticket #%s\n' "$pr" "$n" >>"$S/review-queue"
+		say "agent #$n done: PR #$pr in the review queue, ticket In review"
+		digest "agent #$n done: PR #$pr -> review queue, ticket In review"
+	else
+		say "agent #$n done: $(tr '\n' ' ' <<<"$out")"
+		digest "agent #$n done: $(tr '\n' ' ' <<<"$out")"
+	fi
+}
+
+# The worktree cannot rebase: start it over, so a fresh agent continues from the handoff note on the
+# ticket. The files are named on the ticket, which is where the next agent (and Patrick) reads them.
+do_wt_conflict() {
+	n=$1; files=${2:-unknown}
+	"$WT" refresh "$n" >/dev/null
+	"$TICKET" set "$n" -s Ready
+	comment "$n" "wt refresh: rebase conflicts in $files. Worktree refreshed from origin/integration, ticket Ready for a fresh agent; continue from the handoff note above."
+	say "wt refresh #$n: conflicts in $files, ticket Ready"
+	digest "wt refresh #$n: conflicts in $files, ticket Ready"
+}
+
+# Handoff ladder: a killed agent's work is committed and put up for review, then a new ticket starts a
+# fresh agent on the same work. Rung 3 ends the ladder: the ticket is blocked and needs a split.
+do_killed() {
+	n=$1; reason=${2:-unknown}
+	mkdir -p "$S/refresh"
+	c=$(cat "$S/refresh/$n" 2>/dev/null || echo 0)
+	c=$((c + 1))
+	printf '%s\n' "$c" >"$S/refresh/$n"
+	out=$("$WT" finish "$n" 2>&1 || true)
+	if [ "$c" -lt 3 ]; then
+		new=$("$TICKET" new -t "Forced handoff #$n ($reason, rung $c/3)" -k Task -s Ready -p "$n" -b "Continue #$n: read the last comment on #$n for the handoff, then finish the work. Salvaged: $out")
+		say "agent #$n killed ($reason): forced handoff ticket #$new, refresh $c/3"
+		digest "agent #$n killed ($reason): forced handoff ticket #$new, refresh $c/3"
+	else
+		# The board has no Blocked status, so Blocked is a label, like needs:patrick; the planner splits.
+		"$GH" api "repos/$REPO/issues/$n/labels" -f 'labels[]=blocked' -f 'labels[]=needs:split' >/dev/null
+		comment "$n" "agent #$n killed ($reason) 3 times: Blocked, needs:split. The handoff ladder is at 3/3; no further agent is launched on #$n."
+		say "agent #$n killed ($reason) 3rd time: Blocked, needs:split"
+		digest "agent #$n killed ($reason) 3rd time: Blocked, needs:split"
+	fi
+}
+
+# CI failure on a PR: the ticket the PR names in its body gets the failing job and a log tail, and
+# goes Ready for a fresh agent. JOB/LOG come from the webhook payload when the caller has them.
+do_ci_failure() {
+	pr=$1; job=${2:-}; logfile=${3:-}
+	tmp=$(mktemp -d "${TMPDIR:-/tmp}/event-route-ci.XXXXXX")
+	trap 'rm -rf "$tmp"' EXIT
+	# Failing jobs of the PR head commit: five gh calls, no polling, no LLM.
+	sha=$("$GH" api "repos/$REPO/pulls/$pr" --jq .head.sha 2>/dev/null || echo "")
+	for r in $("$GH" api "repos/$REPO/actions/runs?head_sha=$sha&per_page=100" --jq '.workflow_runs[]|select(.conclusion=="failure")|.id' 2>/dev/null); do
+		for j in $("$GH" api "repos/$REPO/actions/runs/$r/jobs" --jq '.jobs[]|select(.conclusion=="failure")|.id' 2>/dev/null); do
+			name=$("$GH" api "repos/$REPO/actions/jobs/$j" --jq .name 2>/dev/null || echo "job $j")
+			printf '=== %s\n' "$name" >>"$tmp/log"
+			"$GH" api "repos/$REPO/actions/jobs/$j/logs" --jq .url 2>/dev/null | xargs -r curl -sL 2>/dev/null | tail -20 >>"$tmp/log" || true
+		done
+	done
+	[ -s "$tmp/log" ] || printf '=== (job unknown, see the Checks tab)\n' >>"$tmp/log"
+	[ -z "$logfile" ] || cat "$logfile" >>"$tmp/log"
+	names=$(sed -nE 's/^=== (.*)$/\1/p' "$tmp/log" | paste -sd, -)
+	[ -z "$job" ] || [ "$job" = "$names" ] || names="$job, $names"
+	logs=$(tail -c 1200 "$tmp/log" | tr '\n' ' ' | sed 's/  */ /g')
+	tickets=$(grep -oE '(Closes|Fixes|Refs) #[0-9]+' <<<"$("$GH" api "repos/$REPO/pulls/$pr" --jq .body 2>/dev/null || echo "")" | grep -oE '#[0-9]+' | tr -d '#' | sort -u)
+	if [ -z "$tickets" ]; then
+		printf 'CI failed on PR #%s: no ticket named in the PR body\n' "$pr" >>"$S/driver-queue"
+		say "CI failure on PR #$pr: no ticket in the PR body, queued for the driver"
+		return 0
+	fi
+	for n in $tickets; do
+		comment "$n" "CI failed on PR #$pr: $names. Log tail: $logs Ticket #${n} Ready for a fresh agent."
+		"$TICKET" set "$n" -s Ready
+		say "CI failure on PR #$pr -> ticket #$n Ready"
+		digest "CI failure on PR #$pr -> ticket #$n Ready"
+	done
+}
+
+cmd=${1:-}; shift || true
+case $cmd in
+agent-done) [ "$#" -ge 1 ] || usage; do_agent_done "$@" ;;
+wt-conflict) [ "$#" -ge 1 ] || usage; do_wt_conflict "$@" ;;
+killed) [ "$#" -ge 1 ] || usage; do_killed "$@" ;;
+ci-failure) [ "$#" -ge 1 ] || usage; do_ci_failure "$@" ;;
+other)
+	printf '%s\n' "${*:-unmatched event}" >>"$S/driver-queue"
+	say "queued for the driver: ${*:-unmatched event}"
+	digest "queued for the driver: ${*:-unmatched event}"
+	;;
+*) usage ;;
+esac
