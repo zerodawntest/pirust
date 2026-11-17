@@ -75,8 +75,10 @@ new)
   { [ -z "$S" ] || valid Status "$S"; } || usage
   { [ -z "$PR" ] || valid Priority "$PR"; } || usage
   { [ -z "$SZ" ] || valid Size "$SZ"; } || usage
-  # Lint is enforced on `set ... -s Ready` (an agent must not be launched on a bad
-  # ticket); `new` must always create + set fields and exit 0, so it does not gate here.
+  # Only Task/Bug tickets carry Files:/Verify lines; Epics, Features and needs:patrick tickets do not (ticket #172).
+  if { [ "$K" = Task ] || [ "$K" = Bug ]; } && [[ "$L" != *needs:patrick* ]]; then
+    lint "$BODY" || exit 1
+  fi
   J=$(gh api "repos/$R/issues" "${args[@]}"); N=$(jq -r .number <<<"$J"); ID=$(jq -r .id <<<"$J")
   [[ ,$L, == *,needs:patrick,* ]] && gh api "repos/$R/issues/$N/assignees" -f "assignees[]=Patrick-Kappen" -f "assignees[]=Patrick-Kappen-SLTN" >/dev/null
   [ -n "$P" ] && gh api "repos/$R/issues/$P/sub_issues" -F sub_issue_id="$ID" >/dev/null
@@ -94,7 +96,8 @@ set)
   if [ "$S" = Ready ]; then
     issue=$("$D/gh-bot" api "repos/$R/issues/$N")
     kind=$(jq -r '.type.name // ""' <<<"$issue")
-    if [ "$kind" = Task ] || [ "$kind" = Bug ]; then
+    labels=$(jq -r '[.labels[].name] | join(",")' <<<"$issue")
+    if { [ "$kind" = Task ] || [ "$kind" = Bug ]; } && [[ "$labels" != *needs:patrick* ]]; then
       lint "$(jq -r '.body // ""' <<<"$issue")" || exit 1
     fi
   fi
